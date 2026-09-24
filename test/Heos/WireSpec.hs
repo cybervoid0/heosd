@@ -1,0 +1,272 @@
+-- it's ok in tests to use partial functions
+{-# OPTIONS_GHC -Wno-x-partial -Wno-unrecognised-warning-flags #-}
+
+module Heos.WireSpec (spec) where
+
+import Data.Either (isLeft, isRight)
+import Data.Text (Text)
+import Data.Text qualified as T
+import Heos.Types (KeyFailure, ParamKey, UrlPair (..), UrlParam (..), UrlResponse (..), makeParamKey, renderProblem, text)
+import Heos.Wire
+import Test.Hspec
+import Test.QuickCheck
+
+spec :: Spec
+spec = do
+  ----------------------------------------------------------------------------
+  -- Keys
+  ----------------------------------------------------------------------------
+
+  describe "makeParamKey" $ do
+    it "accepts the keys HEOS actually uses" $
+      mapM_
+        (\k -> makeParamKey k `shouldSatisfy` isRight)
+        ["pid", "level", "sid", "scid", "cid", "mid", "search", "range", "count"]
+
+    it "rejects keys containing characters the protocol reserves" $
+      mapM_
+        (\k -> makeParamKey k `shouldSatisfy` isLeft)
+        ["a=b", "a&b", "100%", "a?b", "a b"]
+
+    -- Its own case, because emptiness needs its own check: T.all isAlphaNum ""
+    -- is vacuously true — there is no element to refute it, so the universal
+    -- statement holds. T.all alone is not enough here.
+    it "rejects the empty key" $
+      makeParamKey "" `shouldSatisfy` isLeft
+
+    -- The reason we moved from Maybe to Either: the cause of rejection is
+    -- observable. KeyFailure's constructors are not exported, so we compare
+    -- the rendered message.
+    it "says why it rejected the key" $ do
+      problemOf (makeParamKey "") `shouldBe` Just "Empty key"
+      problemOf (makeParamKey "a%b") `shouldBe` Just "Illegal symbols in key: a%b"
+
+    -- Current rule, not necessarily the desired one. Underscore is rejected
+    -- (isAlphaNum does not accept it), Unicode letters pass. If the HEOS spec
+    -- turns out to use '_' in a key, this test says the rule must be loosened.
+    it "current rule: letters and digits only, Unicode counts as a letter" $ do
+      makeParamKey "set_volume" `shouldSatisfy` isLeft
+      makeParamKey "пид" `shouldSatisfy` isRight
+
+  ----------------------------------------------------------------------------
+  -- Rendering
+  ----------------------------------------------------------------------------
+
+  describe "renderValue" $ do
+    it "leaves harmless text untouched" $
+      renderValue "Pink Floyd" `shouldBe` "Pink Floyd"
+
+    it "escapes the characters the protocol reserves" $ do
+      renderValue "AC/DC & Queen" `shouldBe` "AC/DC %26 Queen"
+      renderValue "a=b" `shouldBe` "a%3Db"
+      renderValue "100%" `shouldBe` "100%25"
+
+    it "does not re-escape a percent it just inserted" $
+      renderValue "&" `shouldBe` "%26"
+
+  describe "renderQuery" $ do
+    it "an empty list renders as an empty string" $
+      renderQuery [] `shouldBe` ""
+
+    it "a single pair carries no separator" $
+      renderQuery [pair "pid" "1"] `shouldBe` "pid=1"
+
+    it "joins pairs with &" $
+      renderQuery [pair "pid" "1", pair "level" "20"]
+        `shouldBe` "pid=1&level=20"
+
+    -- The key is not escaped and must not be: makeParamKey already guaranteed
+    -- there is nothing in it to escape.
+    it "escapes the value" $
+      renderQuery [pair "search" "AC/DC & Queen"]
+        `shouldBe` "search=AC/DC %26 Queen"
+
+  describe "renderCommandUrl" $ do
+    it "attaches parameters to the address with ?" $
+      renderCommandUrl "heos://player/set_volume" [pair "pid" "1", pair "level" "20"]
+        `shouldBe` "heos://player/set_volume?pid=1&level=20"
+
+    it "omits the ? when there are no parameters" $
+      renderCommandUrl "heos://player/set_volume" []
+        `shouldBe` "heos://player/set_volume"
+
+  ----------------------------------------------------------------------------
+  -- Parsing
+  ----------------------------------------------------------------------------
+
+  describe "decodeValue" $
+    it "expands escape sequences" $ do
+      decodeValue "AC/DC %26 Queen" `shouldBe` "AC/DC & Queen"
+      decodeValue "a%3Db" `shouldBe` "a=b"
+      decodeValue "100%25" `shouldBe` "100%"
+
+  describe "splitPair" $ do
+    it "a chunk with = becomes a pair and its value is unescaped" $ do
+      splitPair "pid=1" `shouldBe` UrlKeyValue (pair "pid" "1")
+      splitPair "q=a%26b" `shouldBe` UrlKeyValue (pair "q" "a&b")
+
+    it "a chunk without = becomes a flag, and flags are not validated" $ do
+      splitPair "command under process"
+        `shouldBe` UrlFlag "command under process"
+      splitPair "100% junk" `shouldBe` UrlFlag "100% junk"
+
+    it "an empty value still makes a pair, not a flag" $
+      splitPair "pid=" `shouldBe` UrlKeyValue (pair "pid" "")
+
+    -- Split on the FIRST '=', the rest goes into the value. renderQuery would
+    -- never produce this (it escapes '=' in values), so parsing is more liberal
+    -- than rendering — which is the right asymmetry for someone else's input.
+    it "extra = characters go into the value instead of breaking the parse" $
+      splitPair "a=b=c" `shouldBe` UrlKeyValue (pair "a" "b=c")
+
+    -- A bad key no longer masquerades as a device message: it has its own
+    -- constructor, and it keeps the ORIGINAL chunk verbatim, including the
+    -- value that used to be dropped.
+    it "a bad key becomes a UrlFailure carrying the original chunk and the reason" $ do
+      splitPair "a%b=x" `shouldSatisfy` isFailure "a%b=x" "Illegal symbols in key: a%b"
+      splitPair "=z" `shouldSatisfy` isFailure "=z" "Empty key"
+
+  describe "decodeQuery" $ do
+    it "parses an ordinary parameter string" $
+      decodeQuery "pid=1&level=20"
+        `shouldBe` [UrlKeyValue (pair "pid" "1"), UrlKeyValue (pair "level" "20")]
+
+    it "a flag mixed with pairs - the device response quoted in Types.hs" $
+      decodeQuery "command under process&sid=10&search=Ok Computer&scid=3"
+        `shouldBe` [ UrlFlag "command under process"
+                   , UrlKeyValue (pair "sid" "10")
+                   , UrlKeyValue (pair "search" "Ok Computer")
+                   , UrlKeyValue (pair "scid" "3")
+                   ]
+
+    -- This is why the list stays heterogeneous: a Maybe Text would hold only
+    -- the first flag and the rest would have to be silently dropped.
+    it "several flags can arrive, and all of them survive" $
+      decodeQuery "command under process&sid=10&partial"
+        `shouldBe` [ UrlFlag "command under process"
+                   , UrlKeyValue (pair "sid" "10")
+                   , UrlFlag "partial"
+                   ]
+
+    it "a broken parameter neither disturbs its neighbours nor poses as a flag" $ do
+      let ps = decodeQuery "command under process&sid=10&a%b=x"
+      length ps `shouldBe` 3
+      head ps `shouldBe` UrlFlag "command under process"
+      ps !! 1 `shouldBe` UrlKeyValue (pair "sid" "10")
+      ps !! 2 `shouldSatisfy` isFailure "a%b=x" "Illegal symbols in key: a%b"
+
+    it "an empty parameter string yields an empty list" $
+      decodeQuery "" `shouldBe` []
+
+    it "stray separators do not produce empty flags" $ do
+      decodeQuery "pid=1&" `shouldBe` [UrlKeyValue (pair "pid" "1")]
+      decodeQuery "&pid=1" `shouldBe` [UrlKeyValue (pair "pid" "1")]
+      decodeQuery "pid=1&&level=20"
+        `shouldBe` [UrlKeyValue (pair "pid" "1"), UrlKeyValue (pair "level" "20")]
+
+  describe "decodeCommandUrl" $ do
+    it "splits an address with parameters" $
+      decodeCommandUrl "heos://player/set_volume?pid=1&level=20"
+        `shouldBe` UrlResponse
+          "heos://player/set_volume"
+          [UrlKeyValue (pair "pid" "1"), UrlKeyValue (pair "level" "20")]
+
+    it "returns the address alone when there are no parameters" $
+      decodeCommandUrl "heos://player/set_volume"
+        `shouldBe` UrlResponse "heos://player/set_volume" []
+
+  ----------------------------------------------------------------------------
+  -- Properties
+  ----------------------------------------------------------------------------
+
+  describe "properties" $ do
+    it "decodeValue . renderValue == id" $
+      forAll wireText $ \t ->
+        decodeValue (renderValue t) === t
+
+    it "renderValue leaves no bare & or = in a value" $
+      forAll wireText $ \t ->
+        T.all (`notElem` ['&', '=']) (renderValue t)
+
+    it "decodeQuery . renderQuery == id" $
+      forAll (listOf1 wirePair) $ \ps ->
+        classify (any (T.any (`elem` ['%', '&', '=']) . val) ps) "with reserved characters" $
+          decodeQuery (renderQuery ps) === (UrlKeyValue <$> ps)
+
+    it "decodeCommandUrl . renderCommandUrl == id" $
+      forAll ((,) <$> wireAddress <*> listOf wirePair) $ \(addr, ps) ->
+        decodeCommandUrl (renderCommandUrl addr ps)
+          === UrlResponse addr (UrlKeyValue <$> ps)
+
+    it "parsing never emits an empty flag" $
+      forAll wireQueryText $ \q ->
+        UrlFlag "" `notElem` decodeQuery q
+
+    it "never more parameters than there are chunks between &" $
+      forAll wireQueryText $ \q ->
+        length (decodeQuery q) <= length (T.splitOn "&" q)
+
+    -- The central ParamKey invariant: whatever arrives on the wire, every key
+    -- in the output is one makeParamKey would have agreed to build.
+    it "every key in the output would pass makeParamKey" $
+      forAll wireQueryText $ \q ->
+        all (isRight . makeParamKey) [p.key.text | UrlKeyValue p <- decodeQuery q]
+
+    -- This used to fail: the error text ended up in a UrlFlag and showed up as
+    -- "a flag that was never in the input". The separate constructor fixed it.
+    it "every flag in the output appeared as a chunk in the input" $
+      forAll wireQueryText $ \q ->
+        all (`elem` T.splitOn "&" q) [f | UrlFlag f <- decodeQuery q]
+
+    -- Same for rejects: a UrlFailure must carry the original chunk verbatim,
+    -- otherwise there is nothing useful to put in the log.
+    it "every UrlFailure carries its original chunk" $
+      forAll wireQueryText $ \q ->
+        all (`elem` T.splitOn "&" q) [c | UrlFailure c _ <- decodeQuery q]
+
+    it "every chunk yields exactly one parameter - nothing is lost" $
+      forAll wireQueryText $ \q ->
+        length (decodeQuery q) === length (filter (/= "") (T.splitOn "&" q))
+
+--------------------------------------------------------------------------------
+-- Helpers and generators
+--------------------------------------------------------------------------------
+
+-- KeyFailure's constructors are not exported from Heos.Types, so the cause
+-- cannot be compared directly — we compare its rendering instead. Export
+-- KeyFailure (..) and these two helpers go away, leaving plain shouldBe.
+isFailure :: Text -> Text -> UrlParam -> Bool
+isFailure chunk problem = \case
+  UrlFailure c f -> c == chunk && renderProblem f == problem
+  _ -> False
+
+-- The rejection reason as text; Nothing when the key is fine.
+problemOf :: Either KeyFailure ParamKey -> Maybe Text
+problemOf = either (Just . renderProblem) (const Nothing)
+
+-- The ParamKey constructor is closed (Heos.Types exports ParamKey (text),
+-- without (..)), so a key can only be built through makeParamKey. The error
+-- call is safe: every key below is known good, and if the rule is tightened
+-- the test will fail, which is exactly what we want.
+pair :: Text -> Text -> UrlPair
+pair k v = either (error . T.unpack . renderProblem) (`UrlPair` v) (makeParamKey k)
+
+-- QuickCheck has no Arbitrary instance for Text. The alphabet is deliberately
+-- narrow and stuffed with reserved characters and fragments of escape
+-- sequences: a naive `T.pack <$> arbitrary` would essentially never emit '%',
+-- '2', '6' in a row, and those are precisely the inputs that break the codec.
+wireText :: Gen Text
+wireText = T.pack <$> listOf (elements "%&=?abc2356D ")
+
+-- A query string "as the device would send it": junk, flags, empty chunks and
+-- bad keys. listOf1, because "" is a separate contract covered by an example.
+wireQueryText :: Gen Text
+wireQueryText = T.pack <$> listOf1 (elements "&=%abc12 ")
+
+wireAddress :: Gen Text
+wireAddress = T.pack <$> listOf1 (elements "abcdeopqrstuvxyz/:_")
+
+wirePair :: Gen UrlPair
+wirePair = pair <$> wireKey <*> wireText
+ where
+  wireKey = T.pack <$> listOf1 (elements "abcdepilv12")
