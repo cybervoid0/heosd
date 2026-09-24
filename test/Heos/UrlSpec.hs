@@ -37,8 +37,13 @@ spec = do
     -- observable. KeyFailure's constructors are not exported, so we compare
     -- the rendered message.
     it "says why it rejected the key" $ do
-      problemOf (makeParamKey "") `shouldBe` Just "Empty key"
-      problemOf (makeParamKey "a%b") `shouldBe` Just "Illegal symbols in key: a%b"
+      makeParamKey "" `shouldBe` Left EmptyKey
+      makeParamKey "a%b" `shouldBe` Left (IllegalKey "a%b")
+
+    -- renderProblem is what ends up in the log, so pin the wording too.
+    it "renders the reason as text for the log" $ do
+      renderProblem EmptyKey `shouldBe` "Empty key"
+      renderProblem (IllegalKey "a%b") `shouldBe` "Illegal symbols in key: a%b"
 
     -- Current rule, not necessarily the desired one. Underscore is rejected
     -- (isAlphaNum does not accept it), Unicode letters pass. If the HEOS spec
@@ -89,6 +94,30 @@ spec = do
       renderCommandUrl "heos://player/set_volume" []
         `shouldBe` "heos://player/set_volume"
 
+  -- renderQuery only accepts [UrlPair], so it can never emit a flag or a
+  -- reject. renderUrlParams covers the other direction: what the DEVICE sends.
+  -- Its real caller is the fake handler, which has to impersonate a device.
+  describe "renderUrlParams" $ do
+    it "an empty list renders as an empty string" $
+      renderUrlParams [] `shouldBe` ""
+
+    it "renders a flag verbatim" $
+      renderUrlParams [UrlFlag "command under process"]
+        `shouldBe` "command under process"
+
+    it "renders a pair with its value escaped" $
+      renderUrlParams [UrlKeyValue (pair "search" "AC/DC & Queen")]
+        `shouldBe` "search=AC/DC %26 Queen"
+
+    -- The only sensible rendering of a reject: the chunk it kept. A KeyFailure
+    -- is this parser's verdict, the protocol has no notion of it.
+    it "renders a reject as the original chunk it kept" $
+      renderUrlParams [UrlFailure "a%b=x" (IllegalKey "a%b")] `shouldBe` "a%b=x"
+
+    it "rebuilds a whole device message unchanged" $
+      let msg = "command under process&sid=10&search=Ok Computer&scid=3"
+       in renderUrlParams (decodeQuery msg) `shouldBe` msg
+
   ----------------------------------------------------------------------------
   -- Parsing
   ----------------------------------------------------------------------------
@@ -130,8 +159,8 @@ spec = do
     -- constructor, and it keeps the ORIGINAL chunk verbatim, including the
     -- value that used to be dropped.
     it "a bad key becomes a UrlFailure carrying the original chunk and the reason" $ do
-      splitPair "a%b=x" `shouldSatisfy` isFailure "a%b=x" "Illegal symbols in key: a%b"
-      splitPair "=z" `shouldSatisfy` isFailure "=z" "Empty key"
+      splitPair "a%b=x" `shouldBe` UrlFailure "a%b=x" (IllegalKey "a%b")
+      splitPair "=z" `shouldBe` UrlFailure "=z" EmptyKey
 
   describe "decodeQuery" $ do
     it "parses an ordinary parameter string" $
@@ -160,7 +189,7 @@ spec = do
       length ps `shouldBe` 3
       head ps `shouldBe` UrlFlag "command under process"
       ps !! 1 `shouldBe` UrlKeyValue (pair "sid" "10")
-      ps !! 2 `shouldSatisfy` isFailure "a%b=x" "Illegal symbols in key: a%b"
+      ps !! 2 `shouldBe` UrlFailure "a%b=x" (IllegalKey "a%b")
 
     it "an empty parameter string yields an empty list" $
       decodeQuery "" `shouldBe` []
@@ -231,6 +260,21 @@ spec = do
       forAll wireQueryText $ \q ->
         all (`elem` T.splitOn "&" q) [c | UrlFailure c _ <- decodeQuery q]
 
+    -- The two renderers must not drift apart: on the pairs they both accept,
+    -- they have to agree character for character.
+    it "renderUrlParams agrees with renderQuery on plain pairs" $
+      forAll (listOf1 wirePair) $ \ps ->
+        renderUrlParams (UrlKeyValue <$> ps) === renderQuery ps
+
+    -- Coming from the WIRE side, rendering back is a normaliser, not an
+    -- identity: decodeQuery drops empty chunks, so "c&" can never come back.
+    -- Idempotence is the honest law, and it is the only one that exercises
+    -- flags and rejects — the two thirds of UrlParam the round-trips above
+    -- can never reach, because renderQuery cannot produce them.
+    it "decodeQuery . renderUrlParams . decodeQuery == decodeQuery" $
+      forAll wireQueryText $ \q ->
+        decodeQuery (renderUrlParams (decodeQuery q)) === decodeQuery q
+
     it "every chunk yields exactly one parameter - nothing is lost" $
       forAll wireQueryText $ \q ->
         length (decodeQuery q) === length (filter (/= "") (T.splitOn "&" q))
@@ -238,18 +282,6 @@ spec = do
 --------------------------------------------------------------------------------
 -- Helpers and generators
 --------------------------------------------------------------------------------
-
--- KeyFailure's constructors are not exported from Heos.Types, so the cause
--- cannot be compared directly — we compare its rendering instead. Export
--- KeyFailure (..) and these two helpers go away, leaving plain shouldBe.
-isFailure :: Text -> Text -> UrlParam -> Bool
-isFailure chunk problem = \case
-  UrlFailure c f -> c == chunk && renderProblem f == problem
-  _ -> False
-
--- The rejection reason as text; Nothing when the key is fine.
-problemOf :: Either KeyFailure ParamKey -> Maybe Text
-problemOf = either (Just . renderProblem) (const Nothing)
 
 -- The ParamKey constructor is closed (Heos.Types exports ParamKey (text),
 -- without (..)), so a key can only be built through makeParamKey. The error

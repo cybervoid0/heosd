@@ -10,7 +10,9 @@ renderProblem :: KeyFailure -> Text
 renderProblem EmptyKey = "Empty key"
 renderProblem (IllegalKey key) = "Illegal symbols in key: " <> key
 
-newtype ParamKey = ParamKey {text :: Text} deriving newtype (Show, Eq)
+newtype ParamKey = ParamKey {text :: Text}
+  deriving stock (Show)
+  deriving newtype (Eq)
 makeParamKey :: Text -> Either KeyFailure ParamKey
 makeParamKey txt = do
   when (T.null txt) $ Left EmptyKey
@@ -35,8 +37,16 @@ renderCommandUrl address pairs = address <> "?" <> renderQuery pairs
 -- | Build the query string from a list of key/value pairs.
 renderQuery :: [UrlPair] -> Text
 renderQuery pairs = T.intercalate "&" (joinPair <$> pairs)
+
+joinPair :: UrlPair -> Text
+joinPair (UrlPair key val) = key.text <> "=" <> renderValue val
+
+renderUrlParams :: [UrlParam] -> Text
+renderUrlParams params = T.intercalate "&" (go <$> params)
  where
-  joinPair (UrlPair key val) = key.text <> "=" <> renderValue val
+  go (UrlFlag flag) = flag
+  go (UrlKeyValue pair) = joinPair pair
+  go (UrlFailure txt _) = txt
 
 -- | Escape the characters the HEOS specification reserves.
 renderValue :: Text -> Text
