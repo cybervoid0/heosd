@@ -1,8 +1,29 @@
-module Heos.Wire (renderCommandUrl, renderQuery, renderValue, decodeCommandUrl, decodeQuery, splitPair, decodeValue) where
+module Heos.Url where
 
+import Control.Monad (unless, when)
+import Data.Char (isAlphaNum)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Heos.Types (UrlPair (..), UrlParam (..), UrlResponse (..), makeParamKey, text)
+
+data KeyFailure = EmptyKey | IllegalKey Text deriving (Show, Eq)
+renderProblem :: KeyFailure -> Text
+renderProblem EmptyKey = "Empty key"
+renderProblem (IllegalKey key) = "Illegal symbols in key: " <> key
+
+newtype ParamKey = ParamKey {text :: Text} deriving newtype (Show, Eq)
+makeParamKey :: Text -> Either KeyFailure ParamKey
+makeParamKey txt = do
+  when (T.null txt) $ Left EmptyKey
+  unless (T.all isAlphaNum txt) $ Left (IllegalKey txt)
+  pure $ ParamKey txt
+
+data UrlPair = UrlPair {key :: ParamKey, val :: Text} deriving (Show, Eq)
+
+--   Sometimes the device sends a bare token instead of a key/value pair, e.g.
+--   "command under process&sid=10&search=Ok Computer&scid=3"
+data UrlParam = UrlFlag Text | UrlKeyValue UrlPair | UrlFailure Text KeyFailure deriving (Show, Eq)
+
+data UrlResponse = UrlResponse {address :: Text, params :: [UrlParam]} deriving (Show, Eq)
 
 -- | Build a HEOS command URL.
 --   Values are escaped, keys are not: makeParamKey already guarantees there is
@@ -27,7 +48,8 @@ renderValue = T.concatMap replace
     '=' -> "%3D"
     c -> T.singleton c
 
--- | Split a command URL into its address and its parameters.
+-- Split a command URL into its address and its parameters.
+-- Not needed for the responses parsing
 decodeCommandUrl :: Text -> UrlResponse
 decodeCommandUrl txt = case query of
   "" -> UrlResponse address []
@@ -37,6 +59,7 @@ decodeCommandUrl txt = case query of
 
 -- | Split "key1=val1&key2=val2" into parameters. Empty chunks are dropped,
 --   so stray separators do not produce empty flags.
+-- Used for parsing parameters in `message` field
 decodeQuery :: Text -> [UrlParam]
 decodeQuery = (splitPair <$>) . filter (/= "") . T.splitOn "&"
 

@@ -1,13 +1,12 @@
 -- it's ok in tests to use partial functions
 {-# OPTIONS_GHC -Wno-x-partial -Wno-unrecognised-warning-flags #-}
 
-module Heos.WireSpec (spec) where
+module Heos.UrlSpec (spec) where
 
 import Data.Either (isLeft, isRight)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Heos.Types (KeyFailure, ParamKey, UrlPair (..), UrlParam (..), UrlResponse (..), makeParamKey, renderProblem, text)
-import Heos.Wire
+import Heos.Url
 import Test.Hspec
 import Test.QuickCheck
 
@@ -94,11 +93,19 @@ spec = do
   -- Parsing
   ----------------------------------------------------------------------------
 
-  describe "decodeValue" $
+  describe "decodeValue" $ do
     it "expands escape sequences" $ do
       decodeValue "AC/DC %26 Queen" `shouldBe` "AC/DC & Queen"
       decodeValue "a%3Db" `shouldBe` "a=b"
       decodeValue "100%25" `shouldBe` "100%"
+
+    -- All three reserved characters in one string, spelled out as a named
+    -- example. The property below covers this shape on every run (about half
+    -- the generated cases contain all three), but the worked example is the
+    -- one quoted in docs/ROADMAP.md, so it earns a test of its own.
+    it "round-trips a value using all three reserved characters at once" $ do
+      renderValue "a&b=c%d" `shouldBe` "a%26b%3Dc%25d"
+      decodeValue (renderValue "a&b=c%d") `shouldBe` "a&b=c%d"
 
   describe "splitPair" $ do
     it "a chunk with = becomes a pair and its value is unescaped" $ do

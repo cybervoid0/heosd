@@ -75,9 +75,11 @@ library
     import:           defaults
 
     -- Modules exported by the library.
-    exposed-modules:  Heos.Types
+    exposed-modules:  Heos.Url
+                      Heos.Envelope
+                      Heos.Media
+                      Heos.Player
                       Heos.Config
-                      Heos.Wire
                       Heos.Discovery
                       Heos.Connection
                       Heos.Effect
@@ -157,7 +159,7 @@ test-suite heosd-test
     -- The entrypoint to the test suite.
     main-is:          Main.hs
 
-    other-modules:    Heos.WireSpec
+    other-modules:    Heos.UrlSpec
 
     build-tool-depends: hspec-discover:hspec-discover
 
