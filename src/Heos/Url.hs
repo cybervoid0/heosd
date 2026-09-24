@@ -38,9 +38,11 @@ renderCommandUrl address pairs = address <> "?" <> renderQuery pairs
 renderQuery :: [UrlPair] -> Text
 renderQuery pairs = T.intercalate "&" (joinPair <$> pairs)
 
+-- | Renders key-value pair
 joinPair :: UrlPair -> Text
 joinPair (UrlPair key val) = key.text <> "=" <> renderValue val
 
+-- | Build the query string from a list of all available UrlParam cases (not only key-value pairs)
 renderUrlParams :: [UrlParam] -> Text
 renderUrlParams params = T.intercalate "&" (go <$> params)
  where
