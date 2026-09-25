@@ -1,0 +1,6 @@
+{
+  "heos": {
+    "command": "event/player_volume_changed",
+    "message": "pid=-1245882071&level=32&mute=off"
+  }
+}

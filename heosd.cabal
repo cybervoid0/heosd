@@ -171,5 +171,4 @@ test-suite heosd-test
                     , QuickCheck
                     , directory
                     , filepath
-                    , bytestring
                     , aeson

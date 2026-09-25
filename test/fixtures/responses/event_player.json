@@ -1,0 +1,5 @@
+{
+  "heos": {
+    "command": "event/players_changed"
+  }
+}
