@@ -1,0 +1,295 @@
+{
+  "heos": {
+    "command": "browse/search",
+    "result": "success",
+    "message": "sid=10&search=qwertyuiopasdfgh&scid=3&returned=26&count=26"
+  },
+  "payload": [
+    {
+      "container": "no",
+      "mid": "442416482",
+      "type": "song",
+      "artist": "qwertyuiopasdfghjklzxcvbnm",
+      "album": "FISH",
+      "album_id": "442416479",
+      "playable": "yes",
+      "name": "Cool Gnomes",
+      "image_url": "http://resources.wimpmusic.com/images/260bf77b/5891/4c09/84aa/5d3d493a55f3/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "437234257",
+      "type": "song",
+      "artist": "qwertyuiopasdfghjklzxcvbnm",
+      "album": "First",
+      "album_id": "437234256",
+      "playable": "yes",
+      "name": "First",
+      "image_url": "http://resources.wimpmusic.com/images/27786016/8ae6/480c/b1de/6a5b557e2b4e/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "442416481",
+      "type": "song",
+      "artist": "qwertyuiopasdfghjklzxcvbnm",
+      "album": "FISH",
+      "album_id": "442416479",
+      "playable": "yes",
+      "name": "Funeral of the Seal",
+      "image_url": "http://resources.wimpmusic.com/images/260bf77b/5891/4c09/84aa/5d3d493a55f3/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "455012653",
+      "type": "song",
+      "artist": "qwertyuiopasdfghjklzxcvbnm",
+      "album": "Self-Medication",
+      "album_id": "455012652",
+      "playable": "yes",
+      "name": "P Hair",
+      "image_url": "http://resources.wimpmusic.com/images/36461e1b/0337/4ba9/9242/dee5b429f72b/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "436299099",
+      "type": "song",
+      "artist": "qwertyuiopasdfghjklzxcvbnm",
+      "album": "Qwerty",
+      "album_id": "436299097",
+      "playable": "yes",
+      "name": "Qwerty",
+      "image_url": "http://resources.wimpmusic.com/images/2e6ca7f5/e4e7/46e7/9c0f/2f849c030e02/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "441361624",
+      "type": "song",
+      "artist": "qwertyuiopasdfghjklzxcvbnm",
+      "album": "Fish",
+      "album_id": "441361623",
+      "playable": "yes",
+      "name": "Suicide Kakafonia",
+      "image_url": "http://resources.wimpmusic.com/images/a91d178a/f6f0/4ba9/8d1a/41b70d2e0db5/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "455012654",
+      "type": "song",
+      "artist": "qwertyuiopasdfghjklzxcvbnm",
+      "album": "Self-Medication",
+      "album_id": "455012652",
+      "playable": "yes",
+      "name": "Self-Medication",
+      "image_url": "http://resources.wimpmusic.com/images/36461e1b/0337/4ba9/9242/dee5b429f72b/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "151714671",
+      "type": "song",
+      "artist": "Batatas Fritas Com Pudim",
+      "album": "QUEP IRRITAÇÃO!!!",
+      "album_id": "151714668",
+      "playable": "yes",
+      "name": "Qwertyuiopasdfghjklzxcvbnm1234567890",
+      "image_url": "http://resources.wimpmusic.com/images/18434535/fb72/4a27/ab6a/0dff2d2fb1fd/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "385719825",
+      "type": "song",
+      "artist": "Trvxzen",
+      "album": "Music That Belongs in the Trash Can",
+      "album_id": "385719824",
+      "playable": "yes",
+      "name": "Qwertyuiopasdfghjklzxcvbnm",
+      "image_url": "http://resources.wimpmusic.com/images/dfd4c78f/88ba/4c98/8107/5d3e81fc4b50/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "388108894",
+      "type": "song",
+      "artist": "DRMPLGA",
+      "album": "Rock Bottom",
+      "album_id": "388108884",
+      "playable": "yes",
+      "name": "Qwertyuiopasdfghjklzxcvbnm",
+      "image_url": "http://resources.wimpmusic.com/images/ae9561d0/e1c7/4f91/a8d1/ee233921bf3f/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "190801523",
+      "type": "song",
+      "artist": "plumbers incorporated",
+      "album": "Plumbers Incinerated",
+      "album_id": "190801514",
+      "playable": "yes",
+      "name": "qwertyuiopasdfghjkl",
+      "image_url": "http://resources.wimpmusic.com/images/bffb39b2/490f/49a5/843b/effb671cf3f7/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "264545318",
+      "type": "song",
+      "artist": "gamer_69",
+      "album": "LOGIN 11",
+      "album_id": "264545288",
+      "playable": "yes",
+      "name": "qwertyuiopasdfghjklzxcvbnm (coolest person ever in ligmadeez)",
+      "image_url": "http://resources.wimpmusic.com/images/f34104cb/367e/457f/b6d7/aad9c4107f14/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "475112294",
+      "type": "song",
+      "artist": "Осколок Мха",
+      "album": "qwertyuiopasdfghjklzxcvbnm",
+      "album_id": "475112293",
+      "playable": "yes",
+      "name": "qwertyuiopasdfghjklzxcvbnm",
+      "image_url": "http://resources.wimpmusic.com/images/4ce0ed41/257c/48db/9e25/967b10a6d6ae/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "484247852",
+      "type": "song",
+      "artist": "TotallyNotAWeebSP",
+      "album": "5",
+      "album_id": "484247847",
+      "playable": "yes",
+      "name": "qwertyuiopasdfghjklzxcvbnm",
+      "image_url": "http://resources.wimpmusic.com/images/29ba2d87/1ed7/4254/b80f/d3df58ecfcc8/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "331604156",
+      "type": "song",
+      "artist": "Ara Coiset",
+      "album": "2010-2020 (05)",
+      "album_id": "331604148",
+      "playable": "yes",
+      "name": "Qwertyuiopasdfghjklzxcvbnm",
+      "image_url": "http://resources.wimpmusic.com/images/bed0ee41/e577/446d/8a91/36d9508b9041/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "475112295",
+      "type": "song",
+      "artist": "Осколок Мха",
+      "album": "qwertyuiopasdfghjklzxcvbnm",
+      "album_id": "475112293",
+      "playable": "yes",
+      "name": "qwertyuiopasdfghjklzxcvbnm (FX Version)",
+      "image_url": "http://resources.wimpmusic.com/images/4ce0ed41/257c/48db/9e25/967b10a6d6ae/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "345895534",
+      "type": "song",
+      "artist": "Jefferson Spyplane",
+      "album": "FULL STOP PUNCTUATION",
+      "album_id": "345895512",
+      "playable": "yes",
+      "name": "Qwertyuiopasdfghjklzxcvbnm (Instrumental)",
+      "image_url": "http://resources.wimpmusic.com/images/6c04a7be/ca9e/4ed4/b5e8/fede2742c351/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "125593991",
+      "type": "song",
+      "artist": "Jordan Esker & The Hundred Percent",
+      "album": "Bored Again (qwertyuiopasdfghjklzxcvbnm)",
+      "album_id": "125593990",
+      "playable": "yes",
+      "name": "Bored Again (qwertyuiopasdfghjklzxcvbnm)",
+      "image_url": "http://resources.wimpmusic.com/images/c154aae7/3784/4312/a3bf/922c6064b2d3/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "547331377",
+      "type": "song",
+      "artist": "JakeListensToGarbage",
+      "album": "Jake's Greatest Failures, Pt. 1",
+      "album_id": "547331356",
+      "playable": "yes",
+      "name": "`1234567890-%3Dqwertyuiopasdfghjkl'zxcvbnm,.-",
+      "image_url": "http://resources.wimpmusic.com/images/df9dce1d/03ca/4fd0/a3e1/ba9643283a28/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "558244932",
+      "type": "song",
+      "artist": "Deep Click Mapping",
+      "album": "Montagem Qwertyuiopasdfghjklzxcvbnm",
+      "album_id": "558244931",
+      "playable": "yes",
+      "name": "Montagem Qwertyuiopasdfghjklzxcvbnm",
+      "image_url": "http://resources.wimpmusic.com/images/cdb8b20c/01b9/4833/bfef/74b8e13d6566/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "381121048",
+      "type": "song",
+      "artist": "EstebanGamer337",
+      "album": "¿Y que tenia que ver? II",
+      "album_id": "381121044",
+      "playable": "yes",
+      "name": "¿Y que tenia que ver? II - qwertyuiopasdfghjklñzxcvbnm",
+      "image_url": "http://resources.wimpmusic.com/images/972a5454/cf96/4995/8d87/1817e21eb663/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "401707696",
+      "type": "song",
+      "artist": "RESURRECTION",
+      "album": "STAB! STAB! STAB!",
+      "album_id": "401707688",
+      "playable": "yes",
+      "name": "Torture method BBBM7: force someone to try and spell qwertyuiopasdfghjklzxcvbnm on a calc (Cool slang for Calulator!)",
+      "image_url": "http://resources.wimpmusic.com/images/7b755e71/a9e8/40d9/894c/d3c18bbef455/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "100724074",
+      "type": "song",
+      "artist": "GPF",
+      "album": "Lovin' Ain't Greazy (Deluxxxe Edition)",
+      "album_id": "100724053",
+      "playable": "yes",
+      "name": "Spaghetti Love (300Bpm Bazz Boozted Remix)",
+      "image_url": "http://resources.wimpmusic.com/images/b5afab36/2faf/40ec/9c38/ff1f19405d4f/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "129488751",
+      "type": "song",
+      "artist": "Prolaps",
+      "album": "Pure Mud Volume 7",
+      "album_id": "129488748",
+      "playable": "yes",
+      "name": "Sewer Cock",
+      "image_url": "http://resources.wimpmusic.com/images/2f9fbe74/88d3/41cf/a453/6a503b4fc79a/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "73113268",
+      "type": "song",
+      "artist": "GPF",
+      "album": "Tardgedy",
+      "album_id": "73113267",
+      "playable": "yes",
+      "name": "Tardgedy",
+      "image_url": "http://resources.wimpmusic.com/images/b3be35bd/4c23/4532/86cd/7d4e7ca0e807/640x640.jpg"
+    },
+    {
+      "container": "no",
+      "mid": "474355390",
+      "type": "song",
+      "artist": "Grommet",
+      "album": "Opposite to the End",
+      "album_id": "474355389",
+      "playable": "yes",
+      "name": "Opposite to the End",
+      "image_url": "http://resources.wimpmusic.com/images/6268881f/0b07/49a3/aacc/2d76f62c6db2/640x640.jpg"
+    }
+  ]
+}

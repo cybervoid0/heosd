@@ -1,22 +1,28 @@
-module Heos.Envelope where
+module Heos.Envelope (Envelope (..), HeosHeader (..), HeosResult (..)) where
 
-import Data.Aeson.Types (FromJSON, Value)
+import Data.Aeson.Types (FromJSON (..), Options (..), Value, defaultOptions, genericParseJSON)
 import Data.Text (Text)
+import GHC.Generics
+
+import Data.Char (toLower)
 
 -- import Data.Text qualified as T
-import GHC.Generics (Generic)
+lowerTags :: Options
+lowerTags = defaultOptions{constructorTagModifier = map toLower}
 
-data Result = Success | Failure deriving stock (Show, Eq, Generic)
-instance FromJSON Result
+data HeosResult = Success | Fail deriving (Show, Eq, Generic)
+instance FromJSON HeosResult where
+  -- parse "success" as Success and "fail" to Fail
+  parseJSON = genericParseJSON lowerTags
 
-data Heos = Heos {command :: Text, result :: Result, message :: Text} deriving stock (Show, Eq, Generic)
-instance FromJSON Heos
+data HeosHeader = HeosHeader {command :: Text, result :: HeosResult, message :: Text} deriving (Show, Eq, Generic)
+instance FromJSON HeosHeader
 
 data Envelope = Envelope
-  { heos :: Heos
+  { heos :: HeosHeader
   , payload :: Maybe Value
   , options :: Maybe [Value]
   }
-  deriving stock (Show, Eq, Generic)
+  deriving (Show, Eq, Generic)
 
 instance FromJSON Envelope

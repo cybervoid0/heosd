@@ -1,0 +1,20 @@
+{
+  "heos": {
+    "command": "player/get_now_playing_media",
+    "result": "success",
+    "message": "pid=-1245882071"
+  },
+  "payload": {
+    "type": "station",
+    "song": "Lebanese Blonde",
+    "station": "Lebanese Blonde",
+    "album": "Comfort Zone 01 - Luxury Downtempo Grooves (Digitally Remastered Version)",
+    "artist": "Thievery Corporation",
+    "image_url": "https://resources.tidal.com/images/bea8d968/e7ce/422d/b354/604574bdb72d/1280x1280.jpg",
+    "album_id": "1",
+    "mid": "1",
+    "qid": 1,
+    "sid": 10
+  },
+  "options": []
+}

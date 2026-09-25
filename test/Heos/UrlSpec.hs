@@ -50,6 +50,7 @@ spec = do
     -- turns out to use '_' in a key, this test says the rule must be loosened.
     it "current rule: letters and digits only, Unicode counts as a letter" $ do
       makeParamKey "set_volume" `shouldSatisfy` isLeft
+      -- ну и слово придумал Клод
       makeParamKey "пид" `shouldSatisfy` isRight
 
   ----------------------------------------------------------------------------

@@ -1,0 +1,7 @@
+{
+  "heos": {
+    "command": "system/heart_beat",
+    "result": "success",
+    "message": ""
+  }
+}

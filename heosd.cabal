@@ -160,6 +160,7 @@ test-suite heosd-test
     main-is:          Main.hs
 
     other-modules:    Heos.UrlSpec
+                      Heos.EnvelopeSpec
 
     build-tool-depends: hspec-discover:hspec-discover
 
@@ -168,3 +169,7 @@ test-suite heosd-test
                     , text
                     , hspec
                     , QuickCheck
+                    , directory
+                    , filepath
+                    , bytestring
+                    , aeson
