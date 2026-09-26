@@ -1,11 +1,12 @@
-module Heos.Envelope (Envelope (..), HeosHeader (..), HeosResult (..), IncomingEnvelope (..), classifyEnvelope, HeosEvent (..), HeosCommand (..), CommandGroup (..), parseCommand, parseGroup, EnvelopeError (..)) where
+module Heos.Envelope (Envelope (..), HeosHeader (..), HeosResult (..), IncomingEnvelope (..), classifyEnvelope) where
 
 import Data.Aeson.Types (FromJSON (..), Options (..), Value, defaultOptions, genericParseJSON)
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import GHC.Generics
+import GHC.Generics (Generic)
+import Heos.Url (UrlParam (UrlFlag), decodeQuery)
 
 lowerTags :: Options
 lowerTags = defaultOptions{constructorTagModifier = map toLower}
@@ -27,44 +28,19 @@ data Envelope = Envelope
 
 instance FromJSON Envelope
 
-data EnvelopeError = CommandFmtFailure Text | UnknownGroup Text deriving (Show, Eq)
-
-data CommandGroup = Event | System | Player | Browse | Group deriving (Show, Eq)
-parseGroup :: Text -> Either EnvelopeError CommandGroup
-parseGroup txt = case txt of
-  "event" -> Right Event
-  "system" -> Right System
-  "player" -> Right Player
-  "browse" -> Right Browse
-  "group" -> Right Group
-  g -> Left $ UnknownGroup g
-
-data HeosCommand = HeosCommand {group :: CommandGroup, name :: Text} deriving (Show, Eq)
-parseCommand :: Text -> Either EnvelopeError HeosCommand
-parseCommand txt = case T.splitOn "/" txt of
-  [g, name]
-    | not (T.null g)
-    , not (T.null name) -> do
-        group <- parseGroup g
-        pure $ HeosCommand group name
-  _ -> Left $ CommandFmtFailure txt
-
-newtype HeosEvent = HeosEvent {name :: Text} deriving (Show, Eq)
-
 data IncomingEnvelope
-  = IncomingEvent HeosEvent Envelope
+  = IncomingEvent Text Envelope
   | IncomingPending Envelope
   | IncomingResponse Envelope
   deriving (Show, Eq)
 
-classifyEnvelope :: Envelope -> Either EnvelopeError IncomingEnvelope
-classifyEnvelope env = do
-  HeosCommand cmd name <- parseCommand env.heos.command
-  case cmd of
-    Event -> pure $ IncomingEvent (HeosEvent name) env
-    _
-      | isPending -> pure $ IncomingPending env
-      | otherwise -> pure $ IncomingResponse env
+classifyEnvelope :: Envelope -> IncomingEnvelope
+classifyEnvelope env
+  -- stripPrefix полезная функция, надо запомнить: удаляет префикс из текста и
+  -- возвращает то что осталось
+  | Just name <- T.stripPrefix "event/" env.heos.command = IncomingEvent name env
+  | isPending = IncomingPending env
+  | otherwise = IncomingResponse env
  where
-  isPending = "command under process" `T.isInfixOf` msg
+  isPending = UrlFlag "command under process" `elem` decodeQuery msg
   msg = fromMaybe "" env.heos.message

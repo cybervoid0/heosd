@@ -3,13 +3,14 @@ module Heos.EnvelopeSpec where
 import Control.Monad (forM_)
 import Data.Aeson (eitherDecodeFileStrict)
 import Data.Either (isRight)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Heos.Envelope
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
 import Test.Hspec
-import Test.QuickCheck (property, (==>))
+import Test.QuickCheck (property)
 
 spec :: Spec
 spec = do
@@ -29,117 +30,123 @@ spec = do
       r <- eitherDecodeFileStrict (dir </> "heart_beat.json")
       r `shouldBe` Right (Envelope (HeosHeader "system/heart_beat" (Just Success) (Just "")) Nothing Nothing)
 
-  describe "parseGroup" $ do
-    it "parses every known group" $
-      traverse parseGroup ["event", "system", "player", "browse", "group"]
-        `shouldBe` Right [Event, System, Player, Browse, Group]
-
-    it "rejects an unknown group, keeping its text" $
-      parseGroup "foo" `shouldBe` Left (UnknownGroup "foo")
-
-    it "is case-sensitive" $
-      parseGroup "Event" `shouldBe` Left (UnknownGroup "Event")
-
-    it "rejects an empty group" $
-      parseGroup "" `shouldBe` Left (UnknownGroup "")
-
-  describe "parseCommand" $ do
-    it "splits group and name" $
-      parseCommand "player/get_players" `shouldBe` Right (HeosCommand Player "get_players")
-
-    it "rejects a command without a slash" $
-      parseCommand "heart_beat" `shouldBe` Left (CommandFmtFailure "heart_beat")
-
-    it "rejects a command with extra segments" $
-      parseCommand "event/a/b" `shouldBe` Left (CommandFmtFailure "event/a/b")
-
-    it "rejects an empty command" $
-      parseCommand "" `shouldBe` Left (CommandFmtFailure "")
-
-    it "reports an unknown group, not a format failure" $
-      parseCommand "foo/bar" `shouldBe` Left (UnknownGroup "foo")
-
-    it "rejects an empty name" $
-      parseCommand "event/" `shouldBe` Left (CommandFmtFailure "event/")
-
-    it "rejects an empty group" $
-      parseCommand "/foo" `shouldBe` Left (CommandFmtFailure "/foo")
-
-    it "rejects a lone slash" $
-      parseCommand "/" `shouldBe` Left (CommandFmtFailure "/")
-
   describe "classifyEnvelope" $ do
-    it "classifies event/* commands as events, carrying the name" $ do
-      let env = envelope "event/player_volume_changed" (Just "pid=1&level=32")
-      classifyEnvelope env `shouldBe` Right (IncomingEvent (HeosEvent "player_volume_changed") env)
+    describe "events" $ do
+      it "classifies event/* as an event, carrying the name" $ do
+        let env = envelope "event/player_volume_changed" (Just "pid=1&level=32")
+        classifyEnvelope env `shouldBe` IncomingEvent "player_volume_changed" env
 
-    it "classifies 'command under process' as pending" $ do
-      let env = envelope "browse/search" (Just "command under process&sid=10")
-      classifyEnvelope env `shouldBe` Right (IncomingPending env)
+      it "keeps everything after event/ as the name, slashes included" $ do
+        let env = envelope "event/a/b" Nothing
+        classifyEnvelope env `shouldBe` IncomingEvent "a/b" env
 
-    it "finds 'command under process' anywhere in the message" $ do
-      let env = envelope "browse/search" (Just "sid=10&command under process")
-      classifyEnvelope env `shouldBe` Right (IncomingPending env)
+      it "accepts an empty event name" $ do
+        let env = envelope "event/" Nothing
+        classifyEnvelope env `shouldBe` IncomingEvent "" env
 
-    it "classifies other commands as responses" $ do
-      let env = envelope "player/get_players" (Just "")
-      classifyEnvelope env `shouldBe` Right (IncomingResponse env)
+      it "prefers event over pending" $ do
+        let env = envelope "event/whatever" (Just "command under process")
+        classifyEnvelope env `shouldBe` IncomingEvent "whatever" env
 
-    it "treats a missing message as a response" $ do
-      let env = envelope "system/heart_beat" Nothing
-      classifyEnvelope env `shouldBe` Right (IncomingResponse env)
+      it "requires the event/ prefix at the start" $ do
+        let env = envelope "player/event/foo" Nothing
+        classifyEnvelope env `shouldBe` IncomingResponse env
 
-    it "classifies group/* commands as responses" $ do
-      let env = envelope "group/get_groups" Nothing
-      classifyEnvelope env `shouldBe` Right (IncomingResponse env)
+      it "is case-sensitive about the event/ prefix" $ do
+        let env = envelope "Event/foo" Nothing
+        classifyEnvelope env `shouldBe` IncomingResponse env
 
-    it "prefers event over pending" $ do
-      let env = envelope "event/whatever" (Just "command under process")
-      classifyEnvelope env `shouldBe` Right (IncomingEvent (HeosEvent "whatever") env)
+      it "requires the slash after event" $ do
+        let env = envelope "eventually/foo" Nothing
+        classifyEnvelope env `shouldBe` IncomingResponse env
 
-    it "fails on an unknown group" $
-      classifyEnvelope (envelope "Event/foo" Nothing) `shouldBe` Left (UnknownGroup "Event")
+      it "event/<suffix> is an event named <suffix>, whatever the message" $
+        property $ \(suffix :: String) (msg :: Maybe String) ->
+          let env = envelope ("event/" <> T.pack suffix) (T.pack <$> msg)
+           in classifyEnvelope env == IncomingEvent (T.pack suffix) env
 
-    it "fails on an unknown group even when the message says pending" $
-      classifyEnvelope (envelope "foo/bar" (Just "command under process")) `shouldBe` Left (UnknownGroup "foo")
+    describe "pending" $ do
+      it "recognises the flag at the start of the message" $ do
+        let env = envelope "browse/search" (Just "command under process&sid=10")
+        classifyEnvelope env `shouldBe` IncomingPending env
 
-    it "fails on a malformed command" $
-      classifyEnvelope (envelope "player/event/foo" Nothing) `shouldBe` Left (CommandFmtFailure "player/event/foo")
+      it "recognises the flag at the end of the message" $ do
+        let env = envelope "browse/search" (Just "sid=10&command under process")
+        classifyEnvelope env `shouldBe` IncomingPending env
 
-    it "fails on an event without a name" $
-      classifyEnvelope (envelope "event/" Nothing) `shouldBe` Left (CommandFmtFailure "event/")
+      it "recognises the flag in the middle of the message" $ do
+        let env = envelope "browse/search" (Just "sid=10&command under process&scid=3")
+        classifyEnvelope env `shouldBe` IncomingPending env
 
-    it "event/<name> with a non-empty name and no slashes is an event with that name" $
-      property $ \(name :: String) (msg :: Maybe String) ->
-        not (null name) && '/' `notElem` name ==>
-          let env = envelope ("event/" <> T.pack name) (T.pack <$> msg)
-           in classifyEnvelope env == Right (IncomingEvent (HeosEvent (T.pack name)) env)
+      it "recognises the flag as the whole message" $ do
+        let env = envelope "browse/search" (Just "command under process")
+        classifyEnvelope env `shouldBe` IncomingPending env
+
+      it "ignores stray separators around the flag" $ do
+        let env = envelope "browse/search" (Just "&&command under process&")
+        classifyEnvelope env `shouldBe` IncomingPending env
+
+      it "does not match the text as part of a longer chunk" $ do
+        let env = envelope "browse/search" (Just "command under processing&sid=10")
+        classifyEnvelope env `shouldBe` IncomingResponse env
+
+      it "does not match the text as a key of a pair" $ do
+        let env = envelope "browse/search" (Just "command under process=1")
+        classifyEnvelope env `shouldBe` IncomingResponse env
+
+      it "does not match the text as a value of a pair" $ do
+        let env = envelope "browse/search" (Just "status=command under process")
+        classifyEnvelope env `shouldBe` IncomingResponse env
+
+      it "is case-sensitive" $ do
+        let env = envelope "browse/search" (Just "Command Under Process")
+        classifyEnvelope env `shouldBe` IncomingResponse env
+
+      it "works for any command group, even an unknown one" $ do
+        let env = envelope "foo/bar" (Just "command under process")
+        classifyEnvelope env `shouldBe` IncomingPending env
+
+    describe "responses" $ do
+      it "classifies an ordinary command as a response" $ do
+        let env = envelope "player/get_players" (Just "")
+        classifyEnvelope env `shouldBe` IncomingResponse env
+
+      it "treats a missing message as a response" $ do
+        let env = envelope "system/heart_beat" Nothing
+        classifyEnvelope env `shouldBe` IncomingResponse env
+
+      it "treats an unknown command group as a response" $ do
+        let env = envelope "foo/bar" (Just "pid=1")
+        classifyEnvelope env `shouldBe` IncomingResponse env
+
+      it "treats a malformed command as a response" $ do
+        let env = envelope "heart_beat" Nothing
+        classifyEnvelope env `shouldBe` IncomingResponse env
+
+      it "treats a failed result as a response" $ do
+        let env = Envelope (HeosHeader "player/get_play_state" (Just Fail) (Just "eid=2&text=ID Not Valid")) Nothing Nothing
+        classifyEnvelope env `shouldBe` IncomingResponse env
 
     describe "on fixtures" $ do
       let dir = "test/fixtures/responses"
-          expectations =
-            [ ("event_player.json", Just "players_changed")
-            , ("event_volume.json", Just "player_volume_changed")
-            ]
-      forM_ expectations $ \(file, expected) ->
-        it (file <> " is the event " <> show expected) $ do
-          decoded <- eitherDecodeFileStrict @Envelope (dir </> file)
-          either expectationFailure (\env -> eventName <$> classifyEnvelope env `shouldBe` Right expected) decoded
-
-      it "search_ok_pending.json is pending" $ do
-        decoded <- eitherDecodeFileStrict @Envelope (dir </> "search_ok_pending.json")
-        either expectationFailure (\env -> classifyEnvelope env `shouldBe` Right (IncomingPending env)) decoded
-
+          expected = \case
+            "event_player.json" -> Just "event players_changed"
+            "event_volume.json" -> Just "event player_volume_changed"
+            "search_ok_pending.json" -> Just "pending"
+            _ -> Nothing
       files <- runIO $ listDirectory dir
-      forM_ files $ \file ->
-        it (file <> " classifies without error") $ do
+      forM_ files $ \file -> do
+        let want = fromMaybe "response" (expected file)
+        it (file <> " is " <> want) $ do
           decoded <- eitherDecodeFileStrict @Envelope (dir </> file)
-          either expectationFailure (\env -> classifyEnvelope env `shouldSatisfy` isRight) decoded
+          either expectationFailure (\env -> describeKind (classifyEnvelope env) `shouldBe` want) decoded
 
 envelope :: Text -> Maybe Text -> Envelope
 envelope cmd msg = Envelope (HeosHeader cmd (Just Success) msg) Nothing Nothing
 
-eventName :: IncomingEnvelope -> Maybe Text
-eventName = \case
-  IncomingEvent ev _ -> Just ev.name
-  _ -> Nothing
+-- A compact description for the fixture table, so the table stays readable.
+describeKind :: IncomingEnvelope -> String
+describeKind = \case
+  IncomingEvent name _ -> "event " <> T.unpack name
+  IncomingPending _ -> "pending"
+  IncomingResponse _ -> "response"
