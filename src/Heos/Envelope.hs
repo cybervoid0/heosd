@@ -1,7 +1,6 @@
 module Heos.Envelope (Envelope (..), HeosHeader (..), HeosResult (..), IncomingEnvelope (..), classifyEnvelope, HeosOutcome (..), HeosError (..)) where
 
-import Data.Aeson ((.:), (.:?))
-import Data.Aeson.Types (FromJSON (..), Options (..), Value, defaultOptions, genericParseJSON, withObject)
+import Data.Aeson.Types (FromJSON (..), Options (..), Value, defaultOptions, genericParseJSON)
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -27,20 +26,8 @@ instance FromJSON HeosResult where
   -- parse "success" as Success and "fail" to Fail
   parseJSON = genericParseJSON lowerTags
 
-data HeosOutcome = Succeeded | Failed HeosError deriving (Show, Eq, Generic)
-
-data HeosHeader = HeosHeader {command :: Text, outcome :: Maybe HeosOutcome, message :: Maybe Text} deriving (Show, Eq, Generic)
-instance FromJSON HeosHeader where
-  parseJSON = withObject "HeosHeader" $ \o -> do
-    command <- o .: "command"
-    message <- o .:? "message"
-    result :: Maybe HeosResult <- o .:? "result"
-    let outcome = do
-          r <- result
-          case r of
-            Success -> pure Succeeded
-            Fail -> pure . Failed . findError . fromMaybe "" $ message
-    pure (HeosHeader{command, outcome, message})
+data HeosHeader = HeosHeader {command :: Text, result :: Maybe HeosResult, message :: Maybe Text} deriving (Show, Eq, Generic)
+instance FromJSON HeosHeader
 
 data Envelope = Envelope
   { heos :: HeosHeader
@@ -51,10 +38,12 @@ data Envelope = Envelope
 
 instance FromJSON Envelope
 
+data HeosOutcome = Succeeded | Failed HeosError deriving (Show, Eq)
+
 data IncomingEnvelope
   = IncomingEvent Text Envelope
   | IncomingPending Envelope
-  | IncomingResponse Envelope
+  | IncomingResponse HeosOutcome Envelope
   deriving (Show, Eq)
 
 classifyEnvelope :: Envelope -> IncomingEnvelope
@@ -63,7 +52,10 @@ classifyEnvelope env
   -- возвращает то что осталось
   | Just name <- T.stripPrefix "event/" env.heos.command = IncomingEvent name env
   | isPending = IncomingPending env
-  | otherwise = IncomingResponse env
+  | otherwise = IncomingResponse outcome env
  where
   isPending = UrlFlag "command under process" `elem` decodeQuery msg
   msg = fromMaybe "" env.heos.message
+  outcome = case env.heos.result of
+    Just Fail -> Failed $ findError msg
+    _ -> Succeeded
