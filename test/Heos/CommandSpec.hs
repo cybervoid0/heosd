@@ -5,6 +5,9 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
 import Heos.Command
+import Heos.Media (ContainerId (..), MediaId (..), SearchCriteriaId (..), SourceId (..))
+import Heos.Player (GroupId (..), OnOff (..), PlayState (..), PlayerId (..), RepeatMode (..))
+import Heos.ToParam (ToParam (..))
 import Test.Hspec
 import Test.QuickCheck (property)
 
@@ -54,8 +57,6 @@ spec = do
     it "on/off and booleans" $ do
       toParam On `shouldBe` "on"
       toParam Off `shouldBe` "off"
-      toParam True `shouldBe` "on"
-      toParam False `shouldBe` "off"
 
     it "play states" $
       map toParam [Play, Pause, Stop] `shouldBe` ["play", "pause", "stop"]
@@ -77,7 +78,8 @@ spec = do
       wire (GetVolume (PlayerId (-1245882071))) `shouldBe` "heos://player/get_volume?pid=-1245882071\r\n"
 
     it "a player id renders as its number, for any Int" $
-      property $ \(n :: Int) -> toParam (PlayerId n) == T.pack (show n)
+      property $
+        \(n :: Int) -> toParam (PlayerId n) == T.pack (show n)
 
   describe "escaping" $ do
     it "reserved characters in a value are escaped" $
@@ -118,13 +120,13 @@ wire = decodeUtf8 . renderCommand
 
 specExamples :: [(String, Command, Text)]
 specExamples =
-  [ ("4.1.1", RegisterForChangeEvents True, "heos://system/register_for_change_events?enable=on")
+  [ ("4.1.1", RegisterForChangeEvents On, "heos://system/register_for_change_events?enable=on")
   , ("4.1.2", AccountCheck, "heos://system/check_account")
   , ("4.1.3", AccountSignIn (Credentials "user@gmail.com" "12345"), "heos://system/sign_in?un=user@gmail.com&pw=12345")
   , ("4.1.4", AccountSignOut, "heos://system/sign_out")
   , ("4.1.5", HeartBeat, "heos://system/heart_beat")
   , ("4.1.6", Reboot, "heos://system/reboot")
-  , ("4.1.7", PrettifyJson True, "heos://system/prettify_json_response?enable=on")
+  , ("4.1.7", PrettifyJson On, "heos://system/prettify_json_response?enable=on")
   , ("4.2.1", GetPlayers, "heos://player/get_players")
   , ("4.2.2", GetPlayerInfo (PlayerId 1), "heos://player/get_player_info?pid=1")
   , ("4.2.3", GetPlayState (PlayerId 1), "heos://player/get_play_state?pid=1")

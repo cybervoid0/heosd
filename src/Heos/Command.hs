@@ -1,4 +1,15 @@
-module Heos.Command where
+module Heos.Command (
+  Command (..),
+  ServiceOption (..),
+  Credentials (..),
+  Range (..),
+  Qid (..),
+  QuickSelectId (..),
+  InputName (..),
+  AddCriteria (..),
+  renderCommand,
+)
+where
 
 import Data.ByteString (ByteString)
 
@@ -6,85 +17,28 @@ import Data.ByteString (ByteString)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
-import Heos.Url (UrlPair, makePair, renderCommandUrl)
-
--- | How a value looks on the wire. Only the value: the key is added by (.=).
-class ToParam a where
-  toParam :: a -> Text
-
--- | A parameter: key and value.
-(.=) :: (ToParam a) => Text -> a -> UrlPair
-k .= v = makePair k (toParam v)
-
--- | An optional parameter: Nothing leaves it out of the command entirely.
-(.=?) :: (ToParam a) => Text -> Maybe a -> [UrlPair]
-k .=? v = maybe [] (\x -> [k .= x]) v
-
-instance ToParam Text where
-  toParam = id
-instance ToParam Int where
-  toParam = T.pack . show
-instance ToParam Bool where
-  toParam b = if b then "on" else "off"
-
--- | Lists go comma-separated: qid=4,5,6, pid=3,1,4
-instance (ToParam a) => ToParam [a] where
-  toParam = T.intercalate "," . map toParam
+import Heos.Media (ContainerId (..), MediaId (..), SearchCriteriaId (..), SourceId (..))
+import Heos.Player (GroupId, OnOff, PlayState, PlayerId, RepeatMode)
+import Heos.ToParam (ToParam (..), (.=), (.=?))
+import Heos.Url (UrlPair, renderCommandUrl)
 
 -- Two parameters, not one value, so no ToParam: see AccountSignIn in commandParts.
 data Credentials = Credentials {login :: Text, password :: Text} deriving (Eq)
 instance Show Credentials where
   show (Credentials login _) = "Login=" <> T.unpack login <> " Password=<hidden>"
 
-data PlayState = Play | Pause | Stop deriving (Show, Eq)
-instance ToParam PlayState where
-  toParam = \case
-    Play -> "play"
-    Pause -> "pause"
-    Stop -> "stop"
-
-newtype PlayerId = PlayerId Int deriving (Show, Eq)
-instance ToParam PlayerId where
-  toParam (PlayerId pid) = toParam pid
-
-data OnOff = On | Off deriving (Show, Eq)
-instance ToParam OnOff where
-  toParam status = case status of
-    On -> "on"
-    Off -> "off"
-
 data Range = Range {start :: Int, end :: Int} deriving (Show, Eq)
 instance ToParam Range where
   toParam (Range start end) = toParam [start, end]
+
 newtype Qid = Qid Int deriving (Show, Eq)
 instance ToParam Qid where
   toParam (Qid qid) = toParam qid
 
--- 4.2.14
-data RepeatMode = RepeatAll | RepeatOne | RepeatOff deriving (Show, Eq)
-instance ToParam RepeatMode where
-  toParam = \case
-    RepeatAll -> "on_all"
-    RepeatOne -> "on_one"
-    RepeatOff -> "off"
 newtype QuickSelectId = QuickSelectId Int deriving (Show, Eq) -- 1..6
 instance ToParam QuickSelectId where
   toParam (QuickSelectId n) = toParam n
-newtype GroupId = GroupId Int deriving (Show, Eq)
-instance ToParam GroupId where
-  toParam (GroupId gid) = toParam gid
-newtype SourceId = SourceId Int deriving (Show, Eq)
-instance ToParam SourceId where
-  toParam (SourceId sid) = toParam sid
-newtype ContainerId = ContainerId Text deriving (Show, Eq)
-instance ToParam ContainerId where
-  toParam (ContainerId cid) = cid
-newtype MediaId = MediaId Text deriving (Show, Eq)
-instance ToParam MediaId where
-  toParam (MediaId mid) = mid
-newtype SearchCriteriaId = SearchCriteriaId Int deriving (Show, Eq)
-instance ToParam SearchCriteriaId where
-  toParam (SearchCriteriaId scid) = toParam scid
+
 newtype InputName = InputName Text deriving (Show, Eq) -- "inputs/aux_in_1", "inputs/hdmi_arc_1", ...
 instance ToParam InputName where
   toParam (InputName name) = name
@@ -98,7 +52,6 @@ instance ToParam AddCriteria where
     AddToEnd -> "3"
     AddReplaceAndPlay -> "4"
 
--- option in 4.4.19; each option carries only the parameters it needs
 data ServiceOption
   = AddTrackToLibrary SourceId MediaId -- 1
   | AddAlbumToLibrary SourceId ContainerId -- 2
@@ -117,13 +70,13 @@ data ServiceOption
   deriving (Show, Eq)
 
 data Command
-  = RegisterForChangeEvents Bool -- 4.1.1
+  = RegisterForChangeEvents OnOff -- 4.1.1
   | AccountCheck -- 4.1.2
   | AccountSignIn Credentials -- 4.1.3
   | AccountSignOut -- 4.1.4
   | HeartBeat -- 4.1.5
   | Reboot -- 4.1.6
-  | PrettifyJson Bool -- 4.1.7
+  | PrettifyJson OnOff -- 4.1.7
   | GetPlayers -- 4.2.1
   | GetPlayerInfo PlayerId -- 4.2.2
   | GetPlayState PlayerId -- 4.2.3

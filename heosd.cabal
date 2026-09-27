@@ -89,6 +89,7 @@ library
                       Heos.Mcp
                       Heos.Http
                       Heos.Command
+                      Heos.ToParam
 
     -- Modules included in this library but not exported.
     -- other-modules:
