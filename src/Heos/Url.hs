@@ -2,6 +2,7 @@ module Heos.Url where
 
 import Control.Monad (unless, when)
 import Data.Char (isAlphaNum)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 
@@ -16,7 +17,7 @@ newtype ParamKey = ParamKey {text :: Text}
 makeParamKey :: Text -> Either KeyFailure ParamKey
 makeParamKey txt = do
   when (T.null txt) $ Left EmptyKey
-  unless (T.all isAlphaNum txt) $ Left (IllegalKey txt)
+  unless (T.all (\c -> isAlphaNum c || c == '_') txt) $ Left (IllegalKey txt)
   pure $ ParamKey txt
 
 data UrlPair = UrlPair {key :: ParamKey, val :: Text} deriving (Show, Eq)
@@ -24,6 +25,8 @@ data UrlPair = UrlPair {key :: ParamKey, val :: Text} deriving (Show, Eq)
 --   Sometimes the device sends a bare token instead of a key/value pair, e.g.
 --   "command under process&sid=10&search=Ok Computer&scid=3"
 data UrlParam = UrlFlag Text | UrlKeyValue UrlPair | UrlFailure Text KeyFailure deriving (Show, Eq)
+lookupParam :: Text -> [UrlParam] -> Maybe Text
+lookupParam k ps = listToMaybe [p.val | UrlKeyValue p <- ps, p.key.text == k]
 
 data UrlResponse = UrlResponse {address :: Text, params :: [UrlParam]} deriving (Show, Eq)
 
@@ -73,7 +76,7 @@ decodeCommandUrl txt = case query of
 --   so stray separators do not produce empty flags.
 -- Used for parsing parameters in `message` field
 decodeQuery :: Text -> [UrlParam]
-decodeQuery = (splitPair <$>) . filter (/= "") . T.splitOn "&"
+decodeQuery = map splitPair . filter (not . T.null) . T.splitOn "&"
 
 -- | Parse a single chunk. No "=" makes it a flag; a bad key makes it a
 --   UrlFailure carrying the original chunk, so nothing is lost.

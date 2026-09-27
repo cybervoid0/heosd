@@ -45,11 +45,19 @@ spec = do
       renderProblem EmptyKey `shouldBe` "Empty key"
       renderProblem (IllegalKey "a%b") `shouldBe` "Illegal symbols in key: a%b"
 
-    -- Current rule, not necessarily the desired one. Underscore is rejected
-    -- (isAlphaNum does not accept it), Unicode letters pass. If the HEOS spec
-    -- turns out to use '_' in a key, this test says the rule must be loosened.
-    it "current rule: letters and digits only, Unicode counts as a letter" $ do
-      makeParamKey "set_volume" `shouldSatisfy` isLeft
+    -- Underscore was once rejected here and this test pinned that as the rule;
+    -- HEOS does use '_' in keys, so the rule was loosened.
+    it "accepts underscores in a key" $
+      mapM_
+        (\k -> makeParamKey k `shouldBe` Right (ParamKey k))
+        ["set_volume", "_a", "a_", "a__b", "_"]
+
+    it "still rejects other punctuation next to an underscore" $
+      mapM_
+        (\k -> makeParamKey k `shouldBe` Left (IllegalKey k))
+        ["a_-b", "a_.b", "a_ b", "a_=b"]
+
+    it "Unicode counts as a letter" $ do
       -- ну и слово придумал Клод
       makeParamKey "пид" `shouldSatisfy` isRight
 
@@ -309,4 +317,4 @@ wireAddress = T.pack <$> listOf1 (elements "abcdeopqrstuvxyz/:_")
 wirePair :: Gen UrlPair
 wirePair = pair <$> wireKey <*> wireText
  where
-  wireKey = T.pack <$> listOf1 (elements "abcdepilv12")
+  wireKey = T.pack <$> listOf1 (elements "abcdepilv12_")

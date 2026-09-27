@@ -1,8 +1,8 @@
 module Heos.EnvelopeSpec where
 
 import Control.Monad (forM_)
-import Data.Aeson (eitherDecodeFileStrict)
-import Data.Either (isRight)
+import Data.Aeson (eitherDecode, eitherDecodeFileStrict)
+import Data.Either (isLeft, isRight)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -28,7 +28,83 @@ spec = do
 
     it "heart_beat is parsed correctly" $ do
       r <- eitherDecodeFileStrict (dir </> "heart_beat.json")
-      r `shouldBe` Right (Envelope (HeosHeader "system/heart_beat" (Just Success) (Just "")) Nothing Nothing)
+      r `shouldBe` Right (Envelope (HeosHeader "system/heart_beat" (Just Succeeded) (Just "")) Nothing Nothing)
+
+  describe "HeosHeader outcome" $ do
+    it "success gives Succeeded" $
+      outcomeOf "{\"command\":\"player/get_players\",\"result\":\"success\",\"message\":\"pid=1\"}"
+        `shouldBe` Right (Just Succeeded)
+
+    it "success does not need eid or text in the message" $
+      outcomeOf "{\"command\":\"system/heart_beat\",\"result\":\"success\",\"message\":\"\"}"
+        `shouldBe` Right (Just Succeeded)
+
+    it "success without a message key still parses" $
+      decodeHeader "{\"command\":\"system/heart_beat\",\"result\":\"success\"}"
+        `shouldBe` Right (HeosHeader "system/heart_beat" (Just Succeeded) Nothing)
+
+    it "no result (an event) gives Nothing" $
+      outcomeOf "{\"command\":\"event/players_changed\"}"
+        `shouldBe` Right Nothing
+
+    it "fail extracts eid and text" $
+      outcomeOf "{\"command\":\"player/get_play_state\",\"result\":\"fail\",\"message\":\"eid=2&text=ID Not Valid&pid=9\"}"
+        `shouldBe` Right (Just (Failed (HeosError (Just 2) (Just "ID Not Valid"))))
+
+    it "fail finds eid and text in any order" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\",\"message\":\"pid=9&text=Oops&eid=13\"}"
+        `shouldBe` Right (Just (Failed (HeosError (Just 13) (Just "Oops"))))
+
+    it "fail unescapes the text" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\",\"message\":\"eid=1&text=A%26B%3DC\"}"
+        `shouldBe` Right (Just (Failed (HeosError (Just 1) (Just "A&B=C"))))
+
+    it "fail without eid is still Failed" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\",\"message\":\"text=Oops\"}"
+        `shouldBe` Right (Just (Failed (HeosError Nothing (Just "Oops"))))
+
+    it "fail with a non-numeric eid is still Failed, without eid" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\",\"message\":\"eid=abc&text=Oops\"}"
+        `shouldBe` Right (Just (Failed (HeosError Nothing (Just "Oops"))))
+
+    it "fail with eid as a bare flag has no eid" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\",\"message\":\"eid&text=Oops\"}"
+        `shouldBe` Right (Just (Failed (HeosError Nothing (Just "Oops"))))
+
+    it "fail without text is still Failed" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\",\"message\":\"eid=2\"}"
+        `shouldBe` Right (Just (Failed (HeosError (Just 2) Nothing)))
+
+    it "fail with an empty message is still Failed" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\",\"message\":\"\"}"
+        `shouldBe` Right (Just (Failed (HeosError Nothing Nothing)))
+
+    it "fail without a message key is still Failed" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\"}"
+        `shouldBe` Right (Just (Failed (HeosError Nothing Nothing)))
+
+    it "fail with a null message is still Failed" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"fail\",\"message\":null}"
+        `shouldBe` Right (Just (Failed (HeosError Nothing Nothing)))
+
+    it "an unknown result value is a parse error" $
+      outcomeOf "{\"command\":\"x/y\",\"result\":\"maybe\"}" `shouldSatisfy` isLeft
+
+    it "a missing command is a parse error" $
+      outcomeOf "{\"result\":\"success\"}" `shouldSatisfy` isLeft
+
+    describe "on fixtures" $ do
+      let dir = "test/fixtures/responses"
+          expected = \case
+            "error_bad_pid.json" -> Just (Failed (HeosError (Just 2) (Just "ID Not Valid")))
+            "event_player.json" -> Nothing
+            "event_volume.json" -> Nothing
+            _ -> Just Succeeded
+      files <- runIO $ listDirectory dir
+      forM_ files $ \file ->
+        it (file <> " has outcome " <> show (expected file)) $ do
+          decoded <- eitherDecodeFileStrict @Envelope (dir </> file)
+          (.heos.outcome) <$> decoded `shouldBe` Right (expected file)
 
   describe "classifyEnvelope" $ do
     describe "events" $ do
@@ -66,19 +142,19 @@ spec = do
            in classifyEnvelope env == IncomingEvent (T.pack suffix) env
 
     describe "pending" $ do
-      it "recognises the flag at the start of the message" $ do
+      it "recognizes the flag at the start of the message" $ do
         let env = envelope "browse/search" (Just "command under process&sid=10")
         classifyEnvelope env `shouldBe` IncomingPending env
 
-      it "recognises the flag at the end of the message" $ do
+      it "recognizes the flag at the end of the message" $ do
         let env = envelope "browse/search" (Just "sid=10&command under process")
         classifyEnvelope env `shouldBe` IncomingPending env
 
-      it "recognises the flag in the middle of the message" $ do
+      it "recognizes the flag in the middle of the message" $ do
         let env = envelope "browse/search" (Just "sid=10&command under process&scid=3")
         classifyEnvelope env `shouldBe` IncomingPending env
 
-      it "recognises the flag as the whole message" $ do
+      it "recognizes the flag as the whole message" $ do
         let env = envelope "browse/search" (Just "command under process")
         classifyEnvelope env `shouldBe` IncomingPending env
 
@@ -124,7 +200,7 @@ spec = do
         classifyEnvelope env `shouldBe` IncomingResponse env
 
       it "treats a failed result as a response" $ do
-        let env = Envelope (HeosHeader "player/get_play_state" (Just Fail) (Just "eid=2&text=ID Not Valid")) Nothing Nothing
+        let env = Envelope (HeosHeader "player/get_play_state" (Just (Failed (HeosError (Just 2) (Just "ID Not Valid")))) (Just "eid=2&text=ID Not Valid")) Nothing Nothing
         classifyEnvelope env `shouldBe` IncomingResponse env
 
     describe "on fixtures" $ do
@@ -141,8 +217,12 @@ spec = do
           decoded <- eitherDecodeFileStrict @Envelope (dir </> file)
           either expectationFailure (\env -> describeKind (classifyEnvelope env) `shouldBe` want) decoded
 
+ where
+  decodeHeader = eitherDecode @HeosHeader
+  outcomeOf json = (.outcome) <$> decodeHeader json
+
 envelope :: Text -> Maybe Text -> Envelope
-envelope cmd msg = Envelope (HeosHeader cmd (Just Success) msg) Nothing Nothing
+envelope cmd msg = Envelope (HeosHeader cmd (Just Succeeded) msg) Nothing Nothing
 
 -- A compact description for the fixture table, so the table stays readable.
 describeKind :: IncomingEnvelope -> String
