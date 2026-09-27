@@ -88,6 +88,7 @@ library
                       Heos.Service
                       Heos.Mcp
                       Heos.Http
+                      Heos.Command
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -161,6 +162,7 @@ test-suite heosd-test
 
     other-modules:    Heos.UrlSpec
                       Heos.EnvelopeSpec
+                      Heos.CommandSpec
 
     build-tool-depends: hspec-discover:hspec-discover
 

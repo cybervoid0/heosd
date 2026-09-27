@@ -49,7 +49,7 @@ spec = do
     -- HEOS does use '_' in keys, so the rule was loosened.
     it "accepts underscores in a key" $
       mapM_
-        (\k -> makeParamKey k `shouldBe` Right (ParamKey k))
+        (\k -> makeParamKey k `shouldBe` Right (makeKey k))
         ["set_volume", "_a", "a_", "a__b", "_"]
 
     it "still rejects other punctuation next to an underscore" $
@@ -82,21 +82,21 @@ spec = do
       renderQuery [] `shouldBe` ""
 
     it "a single pair carries no separator" $
-      renderQuery [pair "pid" "1"] `shouldBe` "pid=1"
+      renderQuery [makePair "pid" "1"] `shouldBe` "pid=1"
 
     it "joins pairs with &" $
-      renderQuery [pair "pid" "1", pair "level" "20"]
+      renderQuery [makePair "pid" "1", makePair "level" "20"]
         `shouldBe` "pid=1&level=20"
 
     -- The key is not escaped and must not be: makeParamKey already guaranteed
     -- there is nothing in it to escape.
     it "escapes the value" $
-      renderQuery [pair "search" "AC/DC & Queen"]
+      renderQuery [makePair "search" "AC/DC & Queen"]
         `shouldBe` "search=AC/DC %26 Queen"
 
   describe "renderCommandUrl" $ do
     it "attaches parameters to the address with ?" $
-      renderCommandUrl "heos://player/set_volume" [pair "pid" "1", pair "level" "20"]
+      renderCommandUrl "heos://player/set_volume" [makePair "pid" "1", makePair "level" "20"]
         `shouldBe` "heos://player/set_volume?pid=1&level=20"
 
     it "omits the ? when there are no parameters" $
@@ -115,7 +115,7 @@ spec = do
         `shouldBe` "command under process"
 
     it "renders a pair with its value escaped" $
-      renderUrlParams [UrlKeyValue (pair "search" "AC/DC & Queen")]
+      renderUrlParams [UrlKeyValue (makePair "search" "AC/DC & Queen")]
         `shouldBe` "search=AC/DC %26 Queen"
 
     -- The only sensible rendering of a reject: the chunk it kept. A KeyFailure
@@ -147,8 +147,8 @@ spec = do
 
   describe "splitPair" $ do
     it "a chunk with = becomes a pair and its value is unescaped" $ do
-      splitPair "pid=1" `shouldBe` UrlKeyValue (pair "pid" "1")
-      splitPair "q=a%26b" `shouldBe` UrlKeyValue (pair "q" "a&b")
+      splitPair "pid=1" `shouldBe` UrlKeyValue (makePair "pid" "1")
+      splitPair "q=a%26b" `shouldBe` UrlKeyValue (makePair "q" "a&b")
 
     it "a chunk without = becomes a flag, and flags are not validated" $ do
       splitPair "command under process"
@@ -156,13 +156,13 @@ spec = do
       splitPair "100% junk" `shouldBe` UrlFlag "100% junk"
 
     it "an empty value still makes a pair, not a flag" $
-      splitPair "pid=" `shouldBe` UrlKeyValue (pair "pid" "")
+      splitPair "pid=" `shouldBe` UrlKeyValue (makePair "pid" "")
 
     -- Split on the FIRST '=', the rest goes into the value. renderQuery would
     -- never produce this (it escapes '=' in values), so parsing is more liberal
     -- than rendering — which is the right asymmetry for someone else's input.
     it "extra = characters go into the value instead of breaking the parse" $
-      splitPair "a=b=c" `shouldBe` UrlKeyValue (pair "a" "b=c")
+      splitPair "a=b=c" `shouldBe` UrlKeyValue (makePair "a" "b=c")
 
     -- A bad key no longer masquerades as a device message: it has its own
     -- constructor, and it keeps the ORIGINAL chunk verbatim, including the
@@ -174,14 +174,14 @@ spec = do
   describe "decodeQuery" $ do
     it "parses an ordinary parameter string" $
       decodeQuery "pid=1&level=20"
-        `shouldBe` [UrlKeyValue (pair "pid" "1"), UrlKeyValue (pair "level" "20")]
+        `shouldBe` [UrlKeyValue (makePair "pid" "1"), UrlKeyValue (makePair "level" "20")]
 
     it "a flag mixed with pairs - the device response quoted in Types.hs" $
       decodeQuery "command under process&sid=10&search=Ok Computer&scid=3"
         `shouldBe` [ UrlFlag "command under process"
-                   , UrlKeyValue (pair "sid" "10")
-                   , UrlKeyValue (pair "search" "Ok Computer")
-                   , UrlKeyValue (pair "scid" "3")
+                   , UrlKeyValue (makePair "sid" "10")
+                   , UrlKeyValue (makePair "search" "Ok Computer")
+                   , UrlKeyValue (makePair "scid" "3")
                    ]
 
     -- This is why the list stays heterogeneous: a Maybe Text would hold only
@@ -189,7 +189,7 @@ spec = do
     it "several flags can arrive, and all of them survive" $
       decodeQuery "command under process&sid=10&partial"
         `shouldBe` [ UrlFlag "command under process"
-                   , UrlKeyValue (pair "sid" "10")
+                   , UrlKeyValue (makePair "sid" "10")
                    , UrlFlag "partial"
                    ]
 
@@ -197,24 +197,24 @@ spec = do
       let ps = decodeQuery "command under process&sid=10&a%b=x"
       length ps `shouldBe` 3
       head ps `shouldBe` UrlFlag "command under process"
-      ps !! 1 `shouldBe` UrlKeyValue (pair "sid" "10")
+      ps !! 1 `shouldBe` UrlKeyValue (makePair "sid" "10")
       ps !! 2 `shouldBe` UrlFailure "a%b=x" (IllegalKey "a%b")
 
     it "an empty parameter string yields an empty list" $
       decodeQuery "" `shouldBe` []
 
     it "stray separators do not produce empty flags" $ do
-      decodeQuery "pid=1&" `shouldBe` [UrlKeyValue (pair "pid" "1")]
-      decodeQuery "&pid=1" `shouldBe` [UrlKeyValue (pair "pid" "1")]
+      decodeQuery "pid=1&" `shouldBe` [UrlKeyValue (makePair "pid" "1")]
+      decodeQuery "&pid=1" `shouldBe` [UrlKeyValue (makePair "pid" "1")]
       decodeQuery "pid=1&&level=20"
-        `shouldBe` [UrlKeyValue (pair "pid" "1"), UrlKeyValue (pair "level" "20")]
+        `shouldBe` [UrlKeyValue (makePair "pid" "1"), UrlKeyValue (makePair "level" "20")]
 
   describe "decodeCommandUrl" $ do
     it "splits an address with parameters" $
       decodeCommandUrl "heos://player/set_volume?pid=1&level=20"
         `shouldBe` UrlResponse
           "heos://player/set_volume"
-          [UrlKeyValue (pair "pid" "1"), UrlKeyValue (pair "level" "20")]
+          [UrlKeyValue (makePair "pid" "1"), UrlKeyValue (makePair "level" "20")]
 
     it "returns the address alone when there are no parameters" $
       decodeCommandUrl "heos://player/set_volume"
@@ -251,11 +251,13 @@ spec = do
       forAll wireQueryText $ \q ->
         length (decodeQuery q) <= length (T.splitOn "&" q)
 
-    -- The central ParamKey invariant: whatever arrives on the wire, every key
-    -- in the output is one makeParamKey would have agreed to build.
-    it "every key in the output would pass makeParamKey" $
+    -- The central ParamKey invariant: whatever arrives on the wire, every makePair
+    -- in the output is one the parser would accept again. A key that slipped
+    -- past makeParamKey (say, with '&' or '=' in it) would not survive being
+    -- rendered and parsed back, so this checks the keys without looking inside.
+    it "every pair in the output survives a render/parse round trip" $
       forAll wireQueryText $ \q ->
-        all (isRight . makeParamKey) [p.key.text | UrlKeyValue p <- decodeQuery q]
+        all (\p -> decodeQuery (renderQuery [p]) == [UrlKeyValue p]) [p | UrlKeyValue p <- decodeQuery q]
 
     -- This used to fail: the error text ended up in a UrlFlag and showed up as
     -- "a flag that was never in the input". The separate constructor fixed it.
@@ -292,13 +294,6 @@ spec = do
 -- Helpers and generators
 --------------------------------------------------------------------------------
 
--- The ParamKey constructor is closed (Heos.Types exports ParamKey (text),
--- without (..)), so a key can only be built through makeParamKey. The error
--- call is safe: every key below is known good, and if the rule is tightened
--- the test will fail, which is exactly what we want.
-pair :: Text -> Text -> UrlPair
-pair k v = either (error . T.unpack . renderProblem) (`UrlPair` v) (makeParamKey k)
-
 -- QuickCheck has no Arbitrary instance for Text. The alphabet is deliberately
 -- narrow and stuffed with reserved characters and fragments of escape
 -- sequences: a naive `T.pack <$> arbitrary` would essentially never emit '%',
@@ -315,6 +310,6 @@ wireAddress :: Gen Text
 wireAddress = T.pack <$> listOf1 (elements "abcdeopqrstuvxyz/:_")
 
 wirePair :: Gen UrlPair
-wirePair = pair <$> wireKey <*> wireText
+wirePair = makePair <$> wireKey <*> wireText
  where
   wireKey = T.pack <$> listOf1 (elements "abcdepilv12_")

@@ -1,4 +1,4 @@
-module Heos.Url where
+module Heos.Url (ParamKey (..), UrlPair (..), UrlParam (..), KeyFailure (..), UrlResponse (..), renderProblem, renderValue, decodeValue, splitPair, makePair, lookupParam, renderCommandUrl, renderQuery, renderUrlParams, decodeCommandUrl, decodeQuery, makeParamKey, makeKey) where
 
 import Control.Monad (unless, when)
 import Data.Char (isAlphaNum)
@@ -20,7 +20,23 @@ makeParamKey txt = do
   unless (T.all (\c -> isAlphaNum c || c == '_') txt) $ Left (IllegalKey txt)
   pure $ ParamKey txt
 
+-- | For keys written in the source code. A bad literal is a programmer's
+--   mistake, and the tests that render every command will catch it at once.
+makeKey :: Text -> ParamKey
+makeKey k = either (error . T.unpack . renderProblem) id (makeParamKey k)
+
+-- | A value is always plain text on the wire. A list such as "qid=4,5,6" is
+--   just a value with commas in it: turning it into a list, or a list into it,
+--   is the job of whoever knows what the value means, not of this module.
 data UrlPair = UrlPair {key :: ParamKey, val :: Text} deriving (Show, Eq)
+
+-- | Makes UrlPair from key and value text args
+makePair :: Text -> Text -> UrlPair
+makePair key = UrlPair (makeKey key)
+
+-- | Renders key-value pair
+joinPair :: UrlPair -> Text
+joinPair (UrlPair key val) = key.text <> "=" <> renderValue val
 
 --   Sometimes the device sends a bare token instead of a key/value pair, e.g.
 --   "command under process&sid=10&search=Ok Computer&scid=3"
@@ -41,16 +57,12 @@ renderCommandUrl address pairs = address <> "?" <> renderQuery pairs
 renderQuery :: [UrlPair] -> Text
 renderQuery pairs = T.intercalate "&" (joinPair <$> pairs)
 
--- | Renders key-value pair
-joinPair :: UrlPair -> Text
-joinPair (UrlPair key val) = key.text <> "=" <> renderValue val
-
 -- | Build the query string from a list of all available UrlParam cases (not only key-value pairs)
 renderUrlParams :: [UrlParam] -> Text
 renderUrlParams params = T.intercalate "&" (go <$> params)
  where
   go (UrlFlag flag) = flag
-  go (UrlKeyValue pair) = joinPair pair
+  go (UrlKeyValue p) = joinPair p
   go (UrlFailure txt _) = txt
 
 -- | Escape the characters the HEOS specification reserves.
