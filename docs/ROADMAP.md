@@ -212,7 +212,7 @@ instance FromJSON Envelope where
 
 ### Этап 9 · Команды
 
-- [ ] сделано
+- [x] сделано
 
 **Делаем:** тип `Command` и `renderCommand :: Command -> ByteString`.
 
