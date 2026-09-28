@@ -8,6 +8,7 @@ import Heos.Command
 import Heos.Media (ContainerId (..), MediaId (..), SearchCriteriaId (..), SourceId (..))
 import Heos.Player (GroupId (..), OnOff (..), PlayState (..), PlayerId (..), RepeatMode (..))
 import Heos.ToParam (ToParam (..))
+import Heos.Url (UrlResponse (..), decodeCommandUrl, lookupParam)
 import Test.Hspec
 import Test.QuickCheck (property)
 
@@ -19,7 +20,7 @@ spec = do
   describe "renderCommand matches the spec examples" $
     forM_ specExamples $ \(section, cmd, expected) ->
       it (section <> "  " <> T.unpack expected) $
-        wire cmd `shouldBe` expected <> "\r\n"
+        wire cmd `shouldBe` expect expected
 
   describe "framing" $ do
     it "every command starts with heos://" $
@@ -31,27 +32,63 @@ spec = do
         wire cmd `shouldSatisfy` T.isSuffixOf "\r\n"
         T.count "\r\n" (wire cmd) `shouldBe` 1
 
-    it "a command without parameters has no ?" $
-      wire GetPlayers `shouldBe` "heos://player/get_players\r\n"
+    it "a command without parameters gets SEQUENCE as its only parameter" $
+      wire GetPlayers `shouldBe` "heos://player/get_players?SEQUENCE=1\r\n"
+
+  describe "SEQUENCE" $ do
+    it "is the last parameter" $
+      forM_ specExamples $ \(_, cmd, _) ->
+        wire cmd `shouldSatisfy` T.isSuffixOf "SEQUENCE=1\r\n"
+
+    it "appears exactly once" $
+      forM_ specExamples $ \(_, cmd, _) ->
+        T.count "SEQUENCE=" (wire cmd) `shouldBe` 1
+
+    it "follows the other parameters with &" $
+      wireSeq 7 (SetVolume (PlayerId 2) 30)
+        `shouldBe` "heos://player/set_volume?pid=2&level=30&SEQUENCE=7\r\n"
+
+    it "carries the number it was given" $
+      property $ \(n :: Int) ->
+        wireSeq n (GetVolume (PlayerId 1))
+          == "heos://player/get_volume?pid=1&SEQUENCE=" <> T.pack (show n) <> "\r\n"
+
+    it "different numbers give different lines for the same command" $
+      wireSeq 1 GetPlayers `shouldNotBe` wireSeq 2 GetPlayers
+
+    -- The device echoes the arguments back in "message", and the response is
+    -- matched by reading SEQUENCE out of it. Parsing our own line the same way
+    -- must give the number back, for any command.
+    it "can be read back from the line with lookupParam" $
+      property $ \(n :: Int) ->
+        let url = T.dropEnd 2 (wireSeq n (Search (SourceId 10) "Ok & Computer" (SearchCriteriaId 3) Nothing))
+         in lookupParam "SEQUENCE" (decodeCommandUrl url).params == Just (T.pack (show n))
+
+    it "does not disturb the other parameters when read back" $ do
+      let url = T.dropEnd 2 (wireSeq 5 (Search (SourceId 10) "Ok & Computer" (SearchCriteriaId 3) Nothing))
+          params = (decodeCommandUrl url).params
+      lookupParam "sid" params `shouldBe` Just "10"
+      lookupParam "search" params `shouldBe` Just "Ok & Computer"
+      lookupParam "scid" params `shouldBe` Just "3"
 
   describe "optional parameters" $ do
     it "Nothing leaves the parameter out entirely" $ do
-      wire (GetQueue (PlayerId 1) Nothing) `shouldBe` "heos://player/get_queue?pid=1\r\n"
+      wire (GetQueue (PlayerId 1) Nothing) `shouldBe` expect "heos://player/get_queue?pid=1"
       wire (BrowseContainer (SourceId 2) (ContainerId "TopAlbums") Nothing)
-        `shouldBe` "heos://browse/browse?sid=2&cid=TopAlbums\r\n"
+        `shouldBe` expect "heos://browse/browse?sid=2&cid=TopAlbums"
       wire (Search (SourceId 2) "U2" (SearchCriteriaId 1) Nothing)
-        `shouldBe` "heos://browse/search?sid=2&search=U2&scid=1\r\n"
-      wire (GetQuickSelects (PlayerId 1) Nothing) `shouldBe` "heos://player/get_quickselects?pid=1\r\n"
+        `shouldBe` expect "heos://browse/search?sid=2&search=U2&scid=1"
+      wire (GetQuickSelects (PlayerId 1) Nothing) `shouldBe` expect "heos://player/get_quickselects?pid=1"
 
     it "Just puts the parameter in its place" $ do
       wire (Search (SourceId 2) "U2" (SearchCriteriaId 1) (Just (Range 0 50)))
-        `shouldBe` "heos://browse/search?sid=2&search=U2&scid=1&range=0,50\r\n"
+        `shouldBe` expect "heos://browse/search?sid=2&search=U2&scid=1&range=0,50"
       wire (GetQuickSelects (PlayerId 1) (Just (QuickSelectId 3)))
-        `shouldBe` "heos://player/get_quickselects?pid=1&id=3\r\n"
+        `shouldBe` expect "heos://player/get_quickselects?pid=1&id=3"
 
     it "an optional parameter in the middle keeps the order around it" $
       wire (PlayStation (PlayerId 1) (SourceId 2) Nothing (MediaId "15376") "Q95")
-        `shouldBe` "heos://browse/play_stream?pid=1&sid=2&mid=15376&name=Q95\r\n"
+        `shouldBe` expect "heos://browse/play_stream?pid=1&sid=2&mid=15376&name=Q95"
 
   describe "values" $ do
     it "on/off and booleans" $ do
@@ -75,7 +112,7 @@ spec = do
       toParam [Qid 4] `shouldBe` "4"
 
     it "negative player ids keep their sign" $
-      wire (GetVolume (PlayerId (-1245882071))) `shouldBe` "heos://player/get_volume?pid=-1245882071\r\n"
+      wire (GetVolume (PlayerId (-1245882071))) `shouldBe` expect "heos://player/get_volume?pid=-1245882071"
 
     it "a player id renders as its number, for any Int" $
       property $
@@ -84,19 +121,19 @@ spec = do
   describe "escaping" $ do
     it "reserved characters in a value are escaped" $
       wire (SaveQueue (PlayerId 1) "Rock & Roll = 100%")
-        `shouldBe` "heos://player/save_queue?pid=1&name=Rock %26 Roll %3D 100%25\r\n"
+        `shouldBe` expect "heos://player/save_queue?pid=1&name=Rock %26 Roll %3D 100%25"
 
     it "a password with reserved characters cannot split into extra parameters" $
       wire (AccountSignIn (Credentials "me" "a&pw=b"))
-        `shouldBe` "heos://system/sign_in?un=me&pw=a%26pw%3Db\r\n"
+        `shouldBe` expect "heos://system/sign_in?un=me&pw=a%26pw%3Db"
 
     it "a URL with its own query string stays one value" $
       wire (PlayUrl (PlayerId 1) "http://host/play?id=1&fmt=mp3")
-        `shouldBe` "heos://browse/play_stream?pid=1&url=http://host/play?id%3D1%26fmt%3Dmp3\r\n"
+        `shouldBe` expect "heos://browse/play_stream?pid=1&url=http://host/play?id%3D1%26fmt%3Dmp3"
 
     it "commas inside a single value are sent as is" $
       wire (SaveQueue (PlayerId 1) "great, playlist")
-        `shouldBe` "heos://player/save_queue?pid=1&name=great, playlist\r\n"
+        `shouldBe` expect "heos://player/save_queue?pid=1&name=great, playlist"
 
     -- A line break inside a value ends the command early, and whatever
     -- follows is read by the device as a second command. The spec does not
@@ -115,8 +152,17 @@ spec = do
     it "the wire carries the real password" $
       wire (AccountSignIn (Credentials "me" "secret")) `shouldSatisfy` T.isInfixOf "pw=secret"
 
+-- | The line for a command sent with SEQUENCE=1.
 wire :: Command -> Text
-wire = decodeUtf8 . renderCommand
+wire = wireSeq 1
+
+wireSeq :: Int -> Command -> Text
+wireSeq n = decodeUtf8 . renderCommand n
+
+-- | A spec example line as it goes on the wire: SEQUENCE=1 appended as the
+--   last parameter, then the line ending.
+expect :: Text -> Text
+expect url = url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "SEQUENCE=1\r\n"
 
 specExamples :: [(String, Command, Text)]
 specExamples =

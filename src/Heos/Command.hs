@@ -134,6 +134,7 @@ data Command
   | SetServiceOption ServiceOption -- 4.4.19
   deriving (Show, Eq)
 
+-- Convert all existing HEOS commands with arguments to an intermediate data representation for further rendering
 commandParts :: Command -> (Text, [UrlPair])
 commandParts = \case
   -- System commands
@@ -146,87 +147,104 @@ commandParts = \case
   PrettifyJson onOff -> ("system/prettify_json_response", ["enable" .= onOff])
   -- Player commands
   GetPlayers -> ("player/get_players", [])
-  GetPlayerInfo pid -> ("player/get_player_info", ["pid" .= pid])
-  GetPlayState pid -> ("player/get_play_state", ["pid" .= pid])
-  SetPlayState pid state -> ("player/set_play_state", ["pid" .= pid, "state" .= state])
-  GetNowPlayingMedia pid -> ("player/get_now_playing_media", ["pid" .= pid])
-  GetVolume pid -> ("player/get_volume", ["pid" .= pid])
-  SetVolume pid level -> ("player/set_volume", ["pid" .= pid, "level" .= level])
-  VolumeUp pid step -> ("player/volume_up", ["pid" .= pid, "step" .= step])
-  VolumeDown pid step -> ("player/volume_down", ["pid" .= pid, "step" .= step])
-  GetMute pid -> ("player/get_mute", ["pid" .= pid])
-  SetMute pid onOff -> ("player/set_mute", ["pid" .= pid, "state" .= onOff])
-  ToggleMute pid -> ("player/toggle_mute", ["pid" .= pid])
-  GetPlayMode pid -> ("player/get_play_mode", ["pid" .= pid])
-  SetPlayMode pid repeatMode shuffle -> ("player/set_play_mode", ["pid" .= pid, "repeat" .= repeatMode, "shuffle" .= shuffle])
-  GetQueue pid range -> ("player/get_queue", ["pid" .= pid] <> ("range" .=? range))
-  PlayQueueItem pid qid -> ("player/play_queue", ["pid" .= pid, "qid" .= qid])
-  RemoveFromQueue pid qids -> ("player/remove_from_queue", ["pid" .= pid, "qid" .= qids])
-  SaveQueue pid name -> ("player/save_queue", ["pid" .= pid, "name" .= name])
-  ClearQueue pid -> ("player/clear_queue", ["pid" .= pid])
-  MoveQueue pid sqids dqid -> ("player/move_queue_item", ["pid" .= pid, "sqid" .= sqids, "dqid" .= dqid])
-  PlayNext pid -> ("player/play_next", ["pid" .= pid])
-  PlayPrevious pid -> ("player/play_previous", ["pid" .= pid])
-  SetQuickSelect pid qsid -> ("player/set_quickselect", ["pid" .= pid, "id" .= qsid])
-  PlayQuickSelect pid qsid -> ("player/play_quickselect", ["pid" .= pid, "id" .= qsid])
-  GetQuickSelects pid qsid -> ("player/get_quickselects", ["pid" .= pid] <> ("id" .=? qsid))
-  CheckUpdate pid -> ("player/check_update", ["pid" .= pid])
+  GetPlayerInfo p -> ("player/get_player_info", [pid p])
+  GetPlayState p -> ("player/get_play_state", [pid p])
+  SetPlayState p state -> ("player/set_play_state", [pid p, "state" .= state])
+  GetNowPlayingMedia p -> ("player/get_now_playing_media", [pid p])
+  GetVolume p -> ("player/get_volume", [pid p])
+  SetVolume p level -> ("player/set_volume", [pid p, "level" .= level])
+  VolumeUp p step -> ("player/volume_up", [pid p, "step" .= step])
+  VolumeDown p step -> ("player/volume_down", [pid p, "step" .= step])
+  GetMute p -> ("player/get_mute", [pid p])
+  SetMute p onOff -> ("player/set_mute", [pid p, "state" .= onOff])
+  ToggleMute p -> ("player/toggle_mute", [pid p])
+  GetPlayMode p -> ("player/get_play_mode", [pid p])
+  SetPlayMode p repeatMode shuffle -> ("player/set_play_mode", [pid p, "repeat" .= repeatMode, "shuffle" .= shuffle])
+  GetQueue p range -> ("player/get_queue", [pid p] <> ("range" .=? range))
+  PlayQueueItem p qid -> ("player/play_queue", [pid p, "qid" .= qid])
+  RemoveFromQueue p qids -> ("player/remove_from_queue", [pid p, "qid" .= qids])
+  SaveQueue p name -> ("player/save_queue", [pid p, "name" .= name])
+  ClearQueue p -> ("player/clear_queue", [pid p])
+  MoveQueue p sqids dqid -> ("player/move_queue_item", [pid p, "sqid" .= sqids, "dqid" .= dqid])
+  PlayNext p -> ("player/play_next", [pid p])
+  PlayPrevious p -> ("player/play_previous", [pid p])
+  SetQuickSelect p qsid -> ("player/set_quickselect", [pid p, "id" .= qsid])
+  PlayQuickSelect p qsid -> ("player/play_quickselect", [pid p, "id" .= qsid])
+  GetQuickSelects p qsid -> ("player/get_quickselects", [pid p] <> ("id" .=? qsid))
+  CheckUpdate p -> ("player/check_update", [pid p])
   -- Group commands
   GetGroups -> ("group/get_groups", [])
-  GetGroupInfo gid -> ("group/get_group_info", ["gid" .= gid])
+  GetGroupInfo g -> ("group/get_group_info", [gid g])
   SetGroup leader members -> ("group/set_group", ["pid" .= (leader : members)])
-  GetGroupVolume gid -> ("group/get_volume", ["gid" .= gid])
-  SetGroupVolume gid level -> ("group/set_volume", ["gid" .= gid, "level" .= level])
-  GroupVolumeUp gid step -> ("group/volume_up", ["gid" .= gid, "step" .= step])
-  GroupVolumeDown gid step -> ("group/volume_down", ["gid" .= gid, "step" .= step])
-  GetGroupMute gid -> ("group/get_mute", ["gid" .= gid])
-  SetGroupMute gid onOff -> ("group/set_mute", ["gid" .= gid, "state" .= onOff])
-  ToggleGroupMute gid -> ("group/toggle_mute", ["gid" .= gid])
+  GetGroupVolume g -> ("group/get_volume", [gid g])
+  SetGroupVolume g level -> ("group/set_volume", [gid g, "level" .= level])
+  GroupVolumeUp g step -> ("group/volume_up", [gid g, "step" .= step])
+  GroupVolumeDown g step -> ("group/volume_down", [gid g, "step" .= step])
+  GetGroupMute g -> ("group/get_mute", [gid g])
+  SetGroupMute g onOff -> ("group/set_mute", [gid g, "state" .= onOff])
+  ToggleGroupMute g -> ("group/toggle_mute", [gid g])
   -- Browse commands
   GetMusicSources -> ("browse/get_music_sources", [])
-  GetSourceInfo sid -> ("browse/get_source_info", ["sid" .= sid])
-  BrowseSource sid -> ("browse/browse", ["sid" .= sid])
-  BrowseContainer sid cid range -> ("browse/browse", ["sid" .= sid, "cid" .= cid] <> ("range" .=? range))
-  GetSearchCriteria sid -> ("browse/get_search_criteria", ["sid" .= sid])
-  Search sid search scid range -> ("browse/search", ["sid" .= sid, "search" .= search, "scid" .= scid] <> ("range" .=? range))
-  PlayStation pid sid cid mid name ->
-    ("browse/play_stream", ["pid" .= pid, "sid" .= sid] <> ("cid" .=? cid) <> ["mid" .= mid, "name" .= name])
-  PlayPreset pid preset -> ("browse/play_preset", ["pid" .= pid, "preset" .= preset])
-  PlayInput pid spid input -> ("browse/play_input", ["pid" .= pid] <> ("spid" .=? spid) <> ["input" .= input])
-  PlayUrl pid url -> ("browse/play_stream", ["pid" .= pid, "url" .= url])
-  AddContainerToQueue pid sid cid aid ->
-    ("browse/add_to_queue", ["pid" .= pid, "sid" .= sid, "cid" .= cid, "aid" .= aid])
-  AddTrackToQueue pid sid cid mid aid ->
-    ("browse/add_to_queue", ["pid" .= pid, "sid" .= sid, "cid" .= cid, "mid" .= mid, "aid" .= aid])
-  RenamePlaylist sid cid name -> ("browse/rename_playlist", ["sid" .= sid, "cid" .= cid, "name" .= name])
-  DeletePlaylist sid cid -> ("browse/delete_playlist", ["sid" .= sid, "cid" .= cid])
-  RetrieveMetadata sid cid -> ("browse/retrieve_metadata", ["sid" .= sid, "cid" .= cid])
+  GetSourceInfo s -> ("browse/get_source_info", [sid s])
+  BrowseSource s -> ("browse/browse", [sid s])
+  BrowseContainer s c range -> ("browse/browse", [sid s, cid c] <> ("range" .=? range))
+  GetSearchCriteria s -> ("browse/get_search_criteria", [sid s])
+  Search s search scid range -> ("browse/search", [sid s, "search" .= search, "scid" .= scid] <> ("range" .=? range))
+  PlayStation p s c m name ->
+    ("browse/play_stream", [pid p, sid s] <> ("cid" .=? c) <> [mid m, "name" .= name])
+  PlayPreset p preset -> ("browse/play_preset", [pid p, "preset" .= preset])
+  PlayInput p spid input -> ("browse/play_input", [pid p] <> ("spid" .=? spid) <> ["input" .= input])
+  PlayUrl p url -> ("browse/play_stream", [pid p, "url" .= url])
+  AddContainerToQueue p s c aid ->
+    ("browse/add_to_queue", [pid p, sid s, cid c, "aid" .= aid])
+  AddTrackToQueue p s c m aid ->
+    ("browse/add_to_queue", [pid p, sid s, cid c, mid m, "aid" .= aid])
+  RenamePlaylist s c name -> ("browse/rename_playlist", [sid s, cid c, "name" .= name])
+  DeletePlaylist s c -> ("browse/delete_playlist", [sid s, cid c])
+  RetrieveMetadata s c -> ("browse/retrieve_metadata", [sid s, cid c])
   SetServiceOption opt -> ("browse/set_service_option", serviceOptionParams opt)
 
 -- | Parameters of 4.4.19, in the order the spec examples use.
 serviceOptionParams :: ServiceOption -> [UrlPair]
 serviceOptionParams = \case
-  AddTrackToLibrary sid mid -> ["sid" .= sid, option 1, "mid" .= mid]
-  AddAlbumToLibrary sid cid -> ["sid" .= sid, option 2, "cid" .= cid]
-  AddStationToLibrary sid mid -> ["sid" .= sid, option 3, "mid" .= mid]
-  AddPlaylistToLibrary sid cid name -> ["sid" .= sid, option 4, "cid" .= cid, "name" .= name]
-  RemoveTrackFromLibrary sid mid -> ["sid" .= sid, option 5, "mid" .= mid]
-  RemoveAlbumFromLibrary sid cid -> ["sid" .= sid, option 6, "cid" .= cid]
-  RemoveStationFromLibrary sid mid -> ["sid" .= sid, option 7, "mid" .= mid]
-  RemovePlaylistFromLibrary sid cid -> ["sid" .= sid, option 8, "cid" .= cid]
-  ThumbsUp sid pid -> ["sid" .= sid, option 11, "pid" .= pid]
-  ThumbsDown sid pid -> ["sid" .= sid, option 12, "pid" .= pid]
-  CreateStation sid name scid range ->
-    ["sid" .= sid, option 13, "name" .= name] <> ("scid" .=? scid) <> ("range" .=? range)
-  AddNowPlayingToFavorites pid -> [option 19, "pid" .= pid]
-  AddStationToFavorites sid mid name -> ["sid" .= sid, option 19, "mid" .= mid, "name" .= name]
-  RemoveFromFavorites mid -> [option 20, "mid" .= mid]
- where
-  -- A bare numeric literal would be ambiguous for (.=), so the type is fixed here.
-  option :: Int -> UrlPair
-  option n = "option" .= n
+  AddTrackToLibrary s m -> [sid s, option 1, mid m]
+  AddAlbumToLibrary s c -> [sid s, option 2, cid c]
+  AddStationToLibrary s m -> [sid s, option 3, mid m]
+  AddPlaylistToLibrary s c name -> [sid s, option 4, cid c, "name" .= name]
+  RemoveTrackFromLibrary s m -> [sid s, option 5, mid m]
+  RemoveAlbumFromLibrary s c -> [sid s, option 6, cid c]
+  RemoveStationFromLibrary s m -> [sid s, option 7, mid m]
+  RemovePlaylistFromLibrary s c -> [sid s, option 8, cid c]
+  ThumbsUp s p -> [sid s, option 11, pid p]
+  ThumbsDown s p -> [sid s, option 12, pid p]
+  CreateStation s name scid range ->
+    [sid s, option 13, "name" .= name] <> ("scid" .=? scid) <> ("range" .=? range)
+  AddNowPlayingToFavorites p -> [option 19, pid p]
+  AddStationToFavorites s m name -> [sid s, option 19, mid m, "name" .= name]
+  RemoveFromFavorites m -> [option 20, mid m]
 
-renderCommand :: Command -> ByteString
-renderCommand cmd = encodeUtf8 (renderCommandUrl ("heos://" <> path) pairs <> "\r\n")
+-- HELPERS --
+option :: Int -> UrlPair
+option n = "option" .= n
+
+pid :: PlayerId -> UrlPair
+pid p = "pid" .= p
+
+sid :: SourceId -> UrlPair
+sid s = "sid" .= s
+
+cid :: ContainerId -> UrlPair
+cid c = "cid" .= c
+
+gid :: GroupId -> UrlPair
+gid g = "gid" .= g
+
+mid :: MediaId -> UrlPair
+mid m = "mid" .= m
+
+-- | Convert Sequence + Command to HEOS-style URL-encoded String
+renderCommand :: Int -> Command -> ByteString
+renderCommand seqNo cmd =
+  encodeUtf8 (renderCommandUrl ("heos://" <> path) (pairs <> ["SEQUENCE" .= seqNo]) <> "\r\n")
  where
   (path, pairs) = commandParts cmd

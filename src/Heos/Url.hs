@@ -69,7 +69,7 @@ renderUrlParams params = T.intercalate "&" (go <$> params)
 renderValue :: Text -> Text
 renderValue = T.concatMap replace
  where
-  replace char = case char of
+  replace = \case
     '&' -> "%26"
     '%' -> "%25"
     '=' -> "%3D"
@@ -103,8 +103,9 @@ splitPair txt = case T.breakOn "=" txt of
 decodeValue :: Text -> Text
 decodeValue = T.pack . go . T.unpack
  where
-  go ('%' : '2' : '6' : rest) = '&' : go rest
-  go ('%' : '3' : 'D' : rest) = '=' : go rest
-  go ('%' : '2' : '5' : rest) = '%' : go rest
-  go (c : rest) = c : go rest
-  go [] = []
+  go = \case
+    ('%' : '2' : '6' : rest) -> '&' : go rest
+    ('%' : '3' : 'D' : rest) -> '=' : go rest
+    ('%' : '2' : '5' : rest) -> '%' : go rest
+    (c : rest) -> c : go rest
+    [] -> []
