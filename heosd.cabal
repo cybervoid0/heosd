@@ -81,6 +81,7 @@ library
                       Heos.Player
                       Heos.Config
                       Heos.Discovery
+                      Heos.Discovery.Internal
                       Heos.Connection
                       Heos.Effect
                       Heos.Handler.Live
@@ -108,7 +109,7 @@ library
                   , scotty
                   , mcp-server
                   , effectful
-                  
+                  , retry
                   
         
     -- Directories containing source files.
@@ -164,12 +165,15 @@ test-suite heosd-test
     other-modules:    Heos.UrlSpec
                       Heos.EnvelopeSpec
                       Heos.CommandSpec
+                      Heos.DiscoverySpec
 
     build-tool-depends: hspec-discover:hspec-discover
 
     -- Test dependencies.
     build-depends:    heosd
                     , text
+                    , bytestring
+                    , network
                     , hspec
                     , QuickCheck
                     , directory
