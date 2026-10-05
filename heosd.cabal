@@ -85,6 +85,7 @@ library
                       Heos.Discovery
                       Heos.Discovery.Internal
                       Heos.Connection
+                      Heos.Connection.Internal
                       Heos.Effect
                       Heos.Handler.Live
                       Heos.Handler.Fake
@@ -169,6 +170,7 @@ test-suite heosd-test
                       Heos.EnvelopeSpec
                       Heos.CommandSpec
                       Heos.DiscoverySpec
+                      Heos.ConnectionSpec
 
     build-tool-depends: hspec-discover:hspec-discover
 
