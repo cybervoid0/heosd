@@ -49,18 +49,24 @@ multicastAddr = SockAddrInet 1900 (tupleToHostAddress (239, 255, 255, 250))
 searchDelay :: Int
 searchDelay = 1
 
+-- | HEOS URN (Uniform Resource Name)
+heosDeviceType :: BS.ByteString
+heosDeviceType = "urn:schemas-denon-com:device:ACT-Denon:1"
+
 mSearchData :: BS.ByteString
 mSearchData =
   BS.intercalate
     "\r\n"
     [ "M-SEARCH * HTTP/1.1"
-    , "HOST: " <> BS.pack (show multicastAddr)
+    , "HOST: " <> bsShow multicastAddr
     , "MAN: \"ssdp:discover\""
-    , "MX: " <> BS.pack (show searchDelay)
-    , "ST: urn:schemas-denon-com:device:ACT-Denon:1"
+    , "MX: " <> bsShow searchDelay
+    , "ST: " <> bsShow heosDeviceType
     , ""
     , ""
     ]
+ where
+  bsShow val = BS.pack (show val)
 
 discoverOnce :: RetryStatus -> IO DiscoveryResult
 discoverOnce _ =
@@ -77,7 +83,7 @@ filterDatagrams datagrams = case (mbResults, nonEmpty others) of
   (Nothing, Nothing) -> Left NoResponse
  where
   (heos, others) = partition isHeos datagrams
-  isHeos (msg, _) = BS.isInfixOf "ACT-Denon" msg
+  isHeos (msg, _) = heosDeviceType `BS.isInfixOf` msg
   mbResults = nonEmpty . mapMaybe go $ heos
   heosPort = 1255
   go (_, SockAddrInet _ ipV4Addr) = Just $ SockAddrInet heosPort ipV4Addr
