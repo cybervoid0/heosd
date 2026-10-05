@@ -93,6 +93,7 @@ library
                       Heos.Http
                       Heos.Command
                       Heos.ToParam
+                      Heos.FirstTalk
 
     -- Modules included in this library but not exported.
     -- other-modules:
