@@ -1,4 +1,6 @@
-module Heos.Connection where
+module Heos.Connection (splitLines) where
+
+import Heos.Connection.Internal
 
 {- live connection: threads, queue, heartbeat -}
 {-

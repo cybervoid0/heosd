@@ -3,7 +3,7 @@ module Heos.ConnectionSpec (spec) where
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
-import Heos.Connection.Internal (splitLines)
+import Heos.Connection (splitLines)
 import Test.Hspec
 import Test.QuickCheck
 
