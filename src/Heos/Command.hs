@@ -12,8 +12,6 @@ module Heos.Command (
 where
 
 import Data.ByteString (ByteString)
-
--- import Data.ByteString qualified as BS
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
