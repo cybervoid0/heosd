@@ -33,6 +33,7 @@ data DiscoveryError
 type DiscoveryResult = Either DiscoveryError (NonEmpty SockAddr)
 type Datagram = (BS.ByteString, SockAddr)
 
+-- | Find HEOS devices in the local network
 discover :: IO DiscoveryResult
 discover = retrying policy shouldRetry discoverOnce
  where
@@ -40,14 +41,22 @@ discover = retrying policy shouldRetry discoverOnce
   -- retry only on Left, i.e. when there is an error
   shouldRetry _ = pure . isLeft
 
+-- | SSDP multicast group and port
+multicastAddr :: SockAddr
+multicastAddr = SockAddrInet 1900 (tupleToHostAddress (239, 255, 255, 250))
+
+-- | MX: how long devices may wait before replying, in seconds
+searchDelay :: Int
+searchDelay = 1
+
 mSearchData :: BS.ByteString
 mSearchData =
   BS.intercalate
     "\r\n"
     [ "M-SEARCH * HTTP/1.1"
-    , "HOST: 239.255.255.250:1900"
+    , "HOST: " <> BS.pack (show multicastAddr)
     , "MAN: \"ssdp:discover\""
-    , "MX: 1"
+    , "MX: " <> BS.pack (show searchDelay)
     , "ST: urn:schemas-denon-com:device:ACT-Denon:1"
     , ""
     , ""
@@ -59,7 +68,6 @@ discoverOnce _ =
     <$> try @IOException (bracket open close handleSocket)
  where
   open = socket AF_INET Datagram defaultProtocol
-  multicastAddr = SockAddrInet 1900 (tupleToHostAddress (239, 255, 255, 250))
   handleSocket sock = sendAllTo sock mSearchData multicastAddr >> collect sock
 
 filterDatagrams :: [Datagram] -> DiscoveryResult
@@ -78,7 +86,7 @@ filterDatagrams datagrams = case (mbResults, nonEmpty others) of
 collect :: Socket -> IO [Datagram]
 collect sock = go []
  where
-  delay = 1500000 -- 1.5 sec
+  delay = searchDelay * 1000000 + 100000
   bufferSize = 4096 -- bytes
   go acc = do
     -- timeout stops waiting if nothing arrived within 1.5 s
