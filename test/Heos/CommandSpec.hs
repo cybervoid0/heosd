@@ -8,7 +8,7 @@ import Heos.Command
 import Heos.Media (ContainerId (..), MediaId (..), SearchCriteriaId (..), SourceId (..))
 import Heos.Player (GroupId (..), OnOff (..), PlayState (..), PlayerId (..), RepeatMode (..))
 import Heos.ToParam (ToParam (..))
-import Heos.Url (UrlResponse (..), decodeCommandUrl, lookupParam)
+import Heos.Url.Internal (UrlResponse (..), decodeCommandUrl, lookupParam)
 import Test.Hspec
 import Test.QuickCheck (property)
 

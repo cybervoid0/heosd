@@ -76,7 +76,9 @@ library
 
     -- Modules exported by the library.
     exposed-modules:  Heos.Url
+                      Heos.Url.Internal
                       Heos.Envelope
+                      Heos.Envelope.Internal
                       Heos.Media
                       Heos.Player
                       Heos.Config

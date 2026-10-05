@@ -4,5 +4,8 @@
   ],
   "haskell.toolchain": {
     "ghc": "9.12.2"
+  },
+  "haskell.serverEnvironment": {
+    "PATH": "${HOME}/.cabal/bin:$PATH"
   }
 }
