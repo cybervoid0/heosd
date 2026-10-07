@@ -34,7 +34,7 @@ type DiscoveryResult = Either DiscoveryError (NonEmpty SockAddr)
 type Datagram = (BS.ByteString, SockAddr)
 
 -- | Finds HEOS devices in the local network
-discover :: IO DiscoveryResult
+discover :: IO (Either DiscoveryError (NonEmpty SockAddr))
 discover = retrying policy shouldRetry discoverOnce
  where
   policy = constantDelay 500000 <> limitRetries 2 -- 0.5 s pause, up to 2 retries (3 attempts)

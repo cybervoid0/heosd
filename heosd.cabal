@@ -108,7 +108,7 @@ library
                   , network
                   , stm
                   , aeson
-                  , ki
+                  , async
                   , yaml
                   , scotty
                   , mcp-server
