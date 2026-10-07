@@ -6,6 +6,7 @@ import Data.Either (isLeft, isRight)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Heos.Envelope
+import Heos.Url (UrlParam (..), decodeQuery, lookupParam, makePair)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -54,25 +55,43 @@ spec = do
 
   describe "classifyEnvelope" $ do
     describe "events" $ do
-      it "classifies event/* as an event, carrying the name" $ do
+      it "classifies event/* as an event, carrying the name and the decoded message" $ do
         let env = envelope "event/player_volume_changed" (Just "pid=1&level=32")
-        classifyEnvelope env `shouldBe` IncomingEvent "player_volume_changed" env
+        classifyEnvelope env
+          `shouldBe` event "player_volume_changed" [pair "pid" "1", pair "level" "32"] env
+
+      -- The event's parameters are what subscribers read: this is the real
+      -- message the device sent when the volume knob was turned.
+      it "lets a subscriber look up pid and level in the event" $ do
+        let env = envelope "event/player_volume_changed" (Just "pid=-1245882071&level=21&mute=off")
+        case classifyEnvelope env of
+          IncomingEvent ev _ -> do
+            lookupParam "pid" ev.params `shouldBe` Just "-1245882071"
+            lookupParam "level" ev.params `shouldBe` Just "21"
+            lookupParam "mute" ev.params `shouldBe` Just "off"
+          other -> expectationFailure ("expected an event, got " <> show other)
+
+      -- System events (players_changed, sources_changed) carry no message.
+      it "an event without a message has no parameters" $ do
+        let env = envelope "event/players_changed" Nothing
+        classifyEnvelope env `shouldBe` event "players_changed" [] env
 
       it "keeps everything after event/ as the name, slashes included" $ do
         let env = envelope "event/a/b" Nothing
-        classifyEnvelope env `shouldBe` IncomingEvent "a/b" env
+        classifyEnvelope env `shouldBe` event "a/b" [] env
 
       it "accepts an empty event name" $ do
         let env = envelope "event/" Nothing
-        classifyEnvelope env `shouldBe` IncomingEvent "" env
+        classifyEnvelope env `shouldBe` event "" [] env
 
+      -- The flag is not swallowed: it stays in the parameters as a flag.
       it "prefers event over pending" $ do
         let env = envelope "event/whatever" (Just "command under process")
-        classifyEnvelope env `shouldBe` IncomingEvent "whatever" env
+        classifyEnvelope env `shouldBe` event "whatever" [UrlFlag "command under process"] env
 
       it "prefers event over a failed result" $ do
         let env = envelopeWith (Just Fail) "event/whatever" (Just "eid=2&text=x")
-        classifyEnvelope env `shouldBe` IncomingEvent "whatever" env
+        classifyEnvelope env `shouldBe` event "whatever" [pair "eid" "2", pair "text" "x"] env
 
       it "requires the event/ prefix at the start" $ do
         let env = envelope "player/event/foo" Nothing
@@ -89,7 +108,8 @@ spec = do
       it "event/<suffix> is an event named <suffix>, whatever the message" $
         property $ \(suffix :: String) (msg :: Maybe String) ->
           let env = envelope ("event/" <> T.pack suffix) (T.pack <$> msg)
-           in classifyEnvelope env == IncomingEvent (T.pack suffix) env
+              params = maybe [] (decodeQuery . T.pack) msg
+           in classifyEnvelope env == event (T.pack suffix) params env
 
     describe "pending" $ do
       it "recognizes the flag at the start of the message" $ do
@@ -221,13 +241,19 @@ spec = do
 envelope :: Text -> Maybe Text -> Envelope
 envelope = envelopeWith (Just Success)
 
+event :: Text -> [UrlParam] -> Envelope -> IncomingEnvelope
+event name params = IncomingEvent (HeosEvent name params)
+
+pair :: Text -> Text -> UrlParam
+pair k v = UrlKeyValue (makePair k v)
+
 envelopeWith :: Maybe HeosResult -> Text -> Maybe Text -> Envelope
 envelopeWith res cmd msg = Envelope (HeosHeader cmd res msg) Nothing Nothing
 
 -- A compact description for the fixture table, so the table stays readable.
 describeKind :: IncomingEnvelope -> String
 describeKind = \case
-  IncomingEvent name _ -> "event " <> T.unpack name
+  IncomingEvent (HeosEvent name _) _ -> "event " <> T.unpack name
   IncomingPending _ -> "pending"
   IncomingResponse Succeeded _ -> "succeeded"
   IncomingResponse (Failed e) _ -> "failed eid=" <> show e.eid <> " text=" <> show e.text

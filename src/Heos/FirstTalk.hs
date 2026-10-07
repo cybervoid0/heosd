@@ -11,9 +11,9 @@ import Data.Text qualified as T
 import Heos.Command (Command (..), renderCommand)
 import Heos.Connection (splitLines)
 import Heos.Discovery (discover)
-import Heos.Envelope (Envelope (..), HeosHeader (..), IncomingEnvelope (..), classifyEnvelope)
+import Heos.Envelope (Envelope (..), HeosEvent (..), IncomingEnvelope (..), classifyEnvelope)
 import Heos.Player (OnOff (On), PlayState (Pause, Play), PlayerId (PlayerId))
-import Heos.Url (decodeQuery, lookupParam)
+import Heos.Url (lookupParam)
 import Network.Socket (Family (AF_INET), Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
 import Network.Socket.ByteString (recv, sendAll)
 import Text.Read (readMaybe)
@@ -49,8 +49,7 @@ readLoop volumeRef sock buffer = do
   forM_ complete $ \bs -> do
     let eitherIncEnv = classifyEnvelope <$> eitherDecodeStrict @Envelope bs
     case eitherIncEnv of
-      Right (IncomingEvent "player_volume_changed" env) -> do
-        let params = maybe [] decodeQuery env.heos.message
+      Right (IncomingEvent (HeosEvent "player_volume_changed" params) _) -> do
         let mbVolume = lookupParam "level" params >>= readMaybe @Int . T.unpack
         -- Этап 15 - Изменяемые ячейки
         atomically $ writeTVar volumeRef mbVolume

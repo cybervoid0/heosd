@@ -40,8 +40,10 @@ instance FromJSON Envelope
 
 data HeosOutcome = Succeeded | Failed HeosError deriving (Show, Eq)
 
+data HeosEvent = HeosEvent {name :: Text, params :: [UrlParam]} deriving (Show, Eq)
+
 data IncomingEnvelope
-  = IncomingEvent Text Envelope
+  = IncomingEvent HeosEvent Envelope
   | IncomingPending Envelope
   | IncomingResponse HeosOutcome Envelope
   deriving (Show, Eq)
@@ -50,7 +52,7 @@ classifyEnvelope :: Envelope -> IncomingEnvelope
 classifyEnvelope env
   -- stripPrefix полезная функция, надо запомнить: удаляет префикс из текста и
   -- возвращает то что осталось
-  | Just name <- T.stripPrefix "event/" env.heos.command = IncomingEvent name env
+  | Just name <- T.stripPrefix "event/" env.heos.command = IncomingEvent (HeosEvent name (maybe [] decodeQuery env.heos.message)) env
   | isPending = IncomingPending env
   | otherwise = IncomingResponse outcome env
  where

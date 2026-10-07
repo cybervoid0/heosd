@@ -8,6 +8,7 @@ module Heos.Envelope (
   IncomingEnvelope (..),
   HeosOutcome (..),
   HeosError (..),
+  HeosEvent (..),
   classifyEnvelope,
 ) where
 
