@@ -1,16 +1,22 @@
 module Heos.FirstTalk (firstTalk) where
 
 import Control.Concurrent.Async (race_)
+import Control.Concurrent.STM
 import Control.Exception (bracket, finally)
+import Data.Aeson (eitherDecodeStrict)
 import Data.ByteString (ByteString)
 import Data.Foldable (forM_)
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Text qualified as T
 import Heos.Command (Command (..), renderCommand)
 import Heos.Connection (splitLines)
 import Heos.Discovery (discover)
+import Heos.Envelope (Envelope (..), HeosHeader (..), IncomingEnvelope (..), classifyEnvelope)
 import Heos.Player (OnOff (On), PlayState (Pause, Play), PlayerId (PlayerId))
+import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
 import Network.Socket.ByteString (recv, sendAll)
+import Text.Read (readMaybe)
 
 -- Этап 11
 firstTalk :: IO ()
@@ -27,31 +33,45 @@ firstTalk =
     print bytes
 
     sendAll sock (renderCommand 2 (RegisterForChangeEvents On))
+    -- ячейка для хранения громкости
+    volumeRef <- newTVarIO (Nothing :: Maybe Int)
     -- параллельный запуск вывода на экран и пульта управления в отдельных потоках
     -- оба потока закрываются при завершении одного из них (нажатие "q")
     race_
-      (readLoop sock "" `finally` putStrLn "reader: stopped")
-      (remote sock `finally` putStrLn "remote: stopped")
+      (readLoop volumeRef sock "" `finally` putStrLn "reader: stopped")
+      (remote volumeRef 0 sock `finally` putStrLn "remote: stopped")
 
 -- Этап 13 - Чтение в цикле
-readLoop :: Socket -> ByteString -> IO ()
-readLoop sock buffer = do
+readLoop :: TVar (Maybe Int) -> Socket -> ByteString -> IO ()
+readLoop volumeRef sock buffer = do
   chunk <- recv sock 4096
   let (complete, rest) = splitLines (buffer <> chunk)
-  forM_ complete print
-  readLoop sock rest
+  forM_ complete $ \bs -> do
+    let eitherIncEnv = classifyEnvelope <$> eitherDecodeStrict @Envelope bs
+    case eitherIncEnv of
+      Right (IncomingEvent "player_volume_changed" env) -> do
+        let params = maybe [] decodeQuery env.heos.message
+        let mbVolume = lookupParam "level" params >>= readMaybe @Int . T.unpack
+        -- Этап 15 - Изменяемые ячейки
+        atomically $ writeTVar volumeRef mbVolume
+      _ -> print bs
+  readLoop volumeRef sock rest
 
 -- Этап 14 - Потоки
-remote :: Socket -> IO ()
-remote sock = do
+remote :: TVar (Maybe Int) -> Int -> Socket -> IO ()
+remote volumeRef seqVal sock = do
   line <- getLine
   case line of
     "q" -> pure ()
+    "v" -> do
+      volume <- readTVarIO volumeRef
+      putStrLn (maybe "Volume: unknown" (("Volume: " <>) . show) volume)
+      remote volumeRef seqVal sock
     _ -> do
       case keyToCommand line of
-        Just cmd -> sendAll sock (renderCommand 0 cmd)
-        Nothing -> putStrLn "команды: + - play pause q"
-      remote sock
+        Just cmd -> sendAll sock (renderCommand seqVal cmd)
+        Nothing -> putStrLn "команды: + - play pause q v"
+      remote volumeRef (seqVal + 1) sock
 
 keyToCommand :: String -> Maybe Command
 keyToCommand cmd = case cmd of
