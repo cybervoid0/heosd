@@ -35,7 +35,7 @@
 </head>
 
 <body>
-  <title>Архитектура heos-mcp</title>
+  <title>Архитектура heosd</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet"
@@ -340,13 +340,13 @@
   </style>
 
   <div class="wrap">
-    <h1>Архитектура heos-mcp</h1>
+    <h1>Архитектура heosd</h1>
     <p class="lede">Как устроен MVP: от просьбы агента до усилителя и обратно. Подписи слева — части роудмапа.</p>
 
     <figure>
       <div class="scroll">
         <svg class="arch" viewBox="0 0 1000 950" role="img"
-          aria-label="Слоистая схема heos-mcp. Агент вызывает MCP-сервер, тот вызывает сценарии, сценарии работают только через эффект Player. Живой обработчик идёт через соединение к усилителю по двум сокетам на порту 1255 и по порту 23 для питания; тестовый обработчик читает записанные ответы. Протокол — чистый код без IO, соединение использует его, чтобы собирать и разбирать строки.">
+          aria-label="Слоистая схема heosd. Агент вызывает MCP-сервер по HTTP, тот вызывает сценарии, сценарии работают только через эффект Heos. Живой обработчик идёт через соединение к усилителю по двум сокетам на порту 1255; питание — отдельный эффект Power через порт 23; тестовый обработчик читает записанные ответы. Протокол — чистый код без IO, соединение использует его, чтобы собирать и разбирать строки.">
           <defs>
             <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
               orient="auto-start-reverse">
@@ -389,9 +389,9 @@
 
           <line x1="237" y1="72" x2="237" y2="117" class="edge" marker-end="url(#ah)" />
           <line x1="432" y1="72" x2="432" y2="117" class="edge" marker-end="url(#ah)" />
-          <text x="334" y="99" class="t-edge" text-anchor="middle">MCP · stdio или HTTP</text>
+          <text x="334" y="99" class="t-edge" text-anchor="middle">MCP · HTTP, не stdio</text>
           <line x1="630" y1="72" x2="630" y2="117" class="edge" marker-end="url(#ah)" />
-          <text x="638" y="99" class="t-edge">REST</text>
+          <text x="638" y="99" class="t-edge">HTTP</text>
 
           <!-- часть 6 -->
           <rect x="150" y="120" width="390" height="56" rx="6" class="box" />
@@ -399,7 +399,7 @@
           <text x="164" y="161" class="t-sub">5 инструментов: status, play_music, volume…</text>
           <rect x="560" y="120" width="140" height="56" rx="6" class="box" />
           <text x="574" y="142" class="t-mod">Heos.Http</text>
-          <text x="574" y="161" class="t-sub">REST и здоровье</text>
+          <text x="574" y="161" class="t-sub">/health · жив ли heartbeat</text>
 
           <line x1="345" y1="176" x2="345" y2="217" class="edge" marker-end="url(#ah)" />
           <line x1="630" y1="176" x2="630" y2="217" class="edge" marker-end="url(#ah)" />
@@ -415,8 +415,8 @@
 
           <!-- часть 4: эффект -->
           <rect x="150" y="320" width="550" height="56" rx="6" class="box" />
-          <text x="164" y="342" class="t-mod">Heos.Effect · эффект Player</text>
-          <text x="164" y="361" class="t-sub">около десяти операций: Search, PlayItem, SetVolume, NowPlaying…</text>
+          <text x="164" y="342" class="t-mod">Heos.Effect · эффект Heos (+ Power)</text>
+          <text x="164" y="361" class="t-sub">около десяти операций: GetPlayers, Search, SetPlayState, SetVolume… · Power: PWON, PWSTANDBY</text>
 
           <line x1="315" y1="376" x2="315" y2="417" class="edge" marker-end="url(#ah)" />
           <text x="323" y="402" class="t-edge">в работе</text>
@@ -426,7 +426,7 @@
           <!-- часть 4: обработчики -->
           <rect x="150" y="420" width="330" height="56" rx="6" class="box" />
           <text x="164" y="442" class="t-mod">Handler.Live</text>
-          <text x="164" y="461" class="t-sub">операция → Command → ждёт ответ</text>
+          <text x="164" y="461" class="t-sub">операция → Command → sendCommand</text>
           <rect x="520" y="420" width="180" height="56" rx="6" class="box" />
           <text x="534" y="442" class="t-mod">Handler.Fake</text>
           <text x="534" y="461" class="t-sub">без сети и усилителя</text>
@@ -440,40 +440,40 @@
           <!-- части 2–3: соединение -->
           <rect x="150" y="520" width="330" height="250" rx="8" class="group-io" />
           <text x="315" y="543" class="t-mod" text-anchor="middle">Heos.Connection</text>
-          <text x="315" y="560" class="t-sub" text-anchor="middle">IO, потоки ki</text>
+          <text x="315" y="560" class="t-sub" text-anchor="middle">IO · потоки async · withConnection</text>
 
           <line x1="237" y1="476" x2="237" y2="572" class="edge" marker-end="url(#ah)" />
-          <text x="245" y="502" class="t-edge">Command</text>
+          <text x="245" y="502" class="t-edge">sendCommand</text>
           <line x1="392" y1="575" x2="392" y2="479" class="edge" marker-end="url(#ah)" />
-          <text x="400" y="502" class="t-edge">ответ по номеру</text>
+          <text x="400" y="502" class="t-edge">Either ошибка ответ</text>
 
           <rect x="165" y="575" width="145" height="50" rx="5" class="box" />
-          <text x="179" y="596" class="t-name">писатель</text>
-          <text x="179" y="613" class="t-sub">очередь, SEQUENCE</text>
+          <text x="179" y="596" class="t-name">sendCommand</text>
+          <text x="179" y="613" class="t-sub">замок · SEQUENCE</text>
           <rect x="320" y="575" width="145" height="50" rx="5" class="box" />
-          <text x="334" y="596" class="t-name">читатель</text>
-          <text x="334" y="613" class="t-sub">режет на строки</text>
+          <text x="334" y="596" class="t-name">reader</text>
+          <text x="334" y="613" class="t-sub">режет и сортирует</text>
           <rect x="165" y="645" width="145" height="50" rx="5" class="box" />
-          <text x="179" y="666" class="t-name">сторож</text>
-          <text x="179" y="683" class="t-sub">heartbeat, реконнект</text>
+          <text x="179" y="666" class="t-name">heartbeat</text>
+          <text x="179" y="683" class="t-sub">withReconnect снаружи</text>
           <rect x="320" y="645" width="145" height="50" rx="5" class="box" />
-          <text x="334" y="666" class="t-name">кэш</text>
-          <text x="334" y="683" class="t-sub">что играет сейчас</text>
+          <text x="334" y="666" class="t-name">subscribe</text>
+          <text x="334" y="683" class="t-sub">TChan HeosEvent → кэш</text>
           <line x1="440" y1="625" x2="440" y2="643" class="edge" marker-end="url(#ah)" />
           <text x="400" y="639" class="t-edge" text-anchor="end">события</text>
 
-          <text x="165" y="724" class="t-sub">pending — выбросить · событие — в кэш</text>
-          <text x="165" y="742" class="t-sub">ответ — тому, кто ждёт</text>
+          <text x="165" y="724" class="t-sub">pending — выбросить · событие — подписчикам</text>
+          <text x="165" y="742" class="t-sub">ответ — в коробочку по SEQUENCE</text>
 
           <!-- поиск и конфиг -->
           <rect x="520" y="600" width="180" height="52" rx="6" class="box" />
           <text x="534" y="622" class="t-mod">Heos.Discovery</text>
-          <text x="534" y="640" class="t-sub">адрес по имени</text>
+          <text x="534" y="640" class="t-sub">SSDP, без mDNS</text>
           <rect x="520" y="678" width="180" height="52" rx="6" class="box" />
           <text x="534" y="700" class="t-mod">Heos.Config</text>
-          <text x="534" y="718" class="t-sub">имя плеера</text>
+          <text x="534" y="718" class="t-sub">адрес?, логин, порт</text>
           <line x1="610" y1="678" x2="610" y2="655" class="edge" marker-end="url(#ah)" />
-          <text x="618" y="670" class="t-edge">имя</text>
+          <text x="618" y="670" class="t-edge">нет адреса</text>
           <line x1="520" y1="630" x2="483" y2="630" class="edge" marker-end="url(#ah)" />
           <text x="501" y="622" class="t-edge" text-anchor="middle">адрес</text>
 
@@ -494,12 +494,12 @@
 
           <rect x="744" y="612" width="222" height="58" rx="5" class="pure-box" />
           <text x="758" y="634" class="t-mod">Heos.Command</text>
-          <text x="952" y="634" class="t-chip" text-anchor="end">почти</text>
+          <text x="952" y="634" class="t-chip" text-anchor="end">готово</text>
           <text x="758" y="652" class="t-sub">команда → строка</text>
 
           <rect x="744" y="680" width="222" height="58" rx="5" class="pure-box" />
           <text x="758" y="702" class="t-mod">Player · Media</text>
-          <text x="952" y="702" class="t-chip todo" text-anchor="end">начато</text>
+          <text x="952" y="702" class="t-chip todo" text-anchor="end">в работе</text>
           <text x="758" y="720" class="t-sub">PlayerId, SourceId…</text>
 
           <line x1="480" y1="755" x2="727" y2="755" class="edge pure" marker-end="url(#ahp)" />
@@ -511,7 +511,7 @@
           <line x1="427" y1="839" x2="427" y2="773" class="edge" marker-end="url(#ah)" />
           <text x="435" y="818" class="t-edge">сокет 2: события</text>
           <polyline points="470,770 470,790 605,790 605,839" class="edge" marker-end="url(#ah)" />
-          <text x="613" y="818" class="t-edge">включить</text>
+          <text x="613" y="818" class="t-edge">Power, мимо Connection</text>
 
           <!-- устройство -->
           <rect x="150" y="842" width="550" height="96" rx="8" class="box" />
@@ -538,14 +538,14 @@
       <li><span>Hermes вызывает инструмент <code>heos_play_music</code> с запросом «Ok Computer».</span></li>
       <li><span><code>Heos.Mcp</code> передаёт его в <code>Heos.Service</code>, в сценарий «найти и поставить».</span>
       </li>
-      <li><span>Сценарий через эффект Player просит <code>Search</code>, выбирает лучшее совпадение и просит
+      <li><span>Сценарий через эффект Heos просит <code>Search</code>, выбирает лучшее совпадение и просит
           <code>PlayItem</code>.</span></li>
-      <li><span><code>Handler.Live</code> превращает операцию в <code>Command</code> и отдаёт её писателю.</span></li>
-      <li><span>Писатель берёт следующий номер и отправляет строку в сокет 1:
+      <li><span><code>Handler.Live</code> превращает операцию в <code>Command</code> и вызывает <code>sendCommand</code>.</span></li>
+      <li><span><code>sendCommand</code> берёт следующий номер, кладёт коробочку в карту ожидающих и под замком отправляет строку в сокет команд:
           <code class="wire">heos://browse/search?sid=10&amp;search=Ok Computer&amp;scid=3&amp;SEQUENCE=7</code></span>
       </li>
-      <li><span>Читатель режет поток на строки. Первым приходит pending с флагом «command under process», его
-          выбрасывают. Следом настоящий ответ с <code>SEQUENCE=7</code>, его отдают тому, кто ждал.</span></li>
+      <li><span><code>reader</code> режет поток на строки. Первым приходит pending с флагом «command under process», его
+          выбрасывают. Следом настоящий ответ с <code>SEQUENCE=7</code>, он попадает в коробочку номер 7, и <code>sendCommand</code> возвращает его. Нет ответа за 5 секунд — <code>Left Timeout</code>.</span></li>
       <li><span>Агент получает короткий ответ: что включилось. Сырой JSON усилителя наружу не уходит.</span></li>
     </ol>
 
@@ -557,7 +557,7 @@
           фикстурах за доли секунды.</p>
       </div>
       <div class="bound">
-        <h3>Эффект Player</h3>
+        <h3>Эффект Heos</h3>
         <p>Сценарии не знают, что под ними: живой усилитель или записанные ответы. Сюда же встанет второй плеер, если он
           когда-нибудь появится.</p>
       </div>
