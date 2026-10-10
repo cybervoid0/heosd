@@ -179,6 +179,7 @@ test-suite heosd-test
                     , text
                     , bytestring
                     , network
+                    , stm
                     , hspec
                     , QuickCheck
                     , directory

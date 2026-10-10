@@ -398,7 +398,7 @@ withConnection :: SockAddr -> (Connection -> IO a) -> IO a      -- 16, 19, 22, 2
 sendCommand :: Connection -> Command -> IO (Either ConnectionError Envelope)   -- 17, 18, 20, 21
 --  послать команду и дождаться именно её ответа; Left — обрыв связи или таймаут
 
-subscribe :: Connection -> IO (TChan IncomingEnvelope)          -- 16
+subscribe :: Connection -> IO (TChan HeosEvent)          -- 16
 --  своя копия потока событий; подписчиков сколько угодно
 
 withReconnect :: (Connection -> IO a) -> IO a                   -- 23
@@ -502,7 +502,7 @@ x <- atomically $ readTVar v
 
 ### Этап 16 · Очередь событий
 
-- [ ] сделано
+- [x] сделано
 
 **Эксперимент:** читающий поток больше не печатает и не разбирает события сам — он кладёт каждое в очередь. Подписчиков двое, и у каждого своя копия очереди: один печатает всё подряд, другой следит только за громкостью и обновляет `volumeRef`. Потоков становится три:
 
@@ -524,14 +524,14 @@ race_ (concurrently_ reader printer) remote
 ```haskell
 data Connection = Connection
   { sock   :: Socket
-  , events :: TChan IncomingEnvelope      -- broadcast; читать только через subscribe
+  , events :: TChan HeosEvent      -- broadcast; читать только через subscribe
   }
 
 withConnection :: SockAddr -> (Connection -> IO a) -> IO a
 -- bracket: открыть сокет / закрыть; внутри — race (reader conn) (act conn)
 
 reader :: Connection -> IO Void           -- readLoop из этапа 13: нарезать, разобрать, положить в events
-subscribe :: Connection -> IO (TChan IncomingEnvelope)   -- atomically (dupTChan conn.events)
+subscribe :: Connection -> IO (TChan HeosEvent)   -- atomically (dupTChan conn.events)
 ```
 
 `reader` никогда не возвращается, поэтому его тип `IO Void`. Тогда у `race` результат `Either Void a`, и левую ветку можно закрыть через `absurd` из `Data.Void`: компилятор сам знает, что чтение не может «успешно закончиться».

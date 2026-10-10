@@ -1,76 +1,66 @@
 module Heos.FirstTalk (firstTalk) where
 
-import Control.Concurrent.Async (race_)
+import Control.Concurrent.Async (concurrently_, race_)
 import Control.Concurrent.STM
-import Control.Exception (bracket, finally)
-import Data.Aeson (eitherDecodeStrict)
-import Data.ByteString (ByteString)
-import Data.Foldable (forM_)
+import Control.Exception (finally)
+import Control.Monad (forever)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as T
+import Data.Void (Void)
 import Heos.Command (Command (..), renderCommand)
-import Heos.Connection (splitLines)
+import Heos.Connection (Connection, sendRaw, subscribe, withConnection)
 import Heos.Discovery (discover)
-import Heos.Envelope (Envelope (..), HeosEvent (..), IncomingEnvelope (..), classifyEnvelope)
+import Heos.Envelope (HeosEvent (..))
 import Heos.Player (OnOff (On), PlayState (Pause, Play), PlayerId (PlayerId))
 import Heos.Url (lookupParam)
-import Network.Socket (Family (AF_INET), Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
-import Network.Socket.ByteString (recv, sendAll)
 import Text.Read (readMaybe)
 
--- Этап 11
+-- Стенд
 firstTalk :: IO ()
 firstTalk =
   discover >>= \case
     Left err -> print err
-    Right addr -> bracket open (\s -> close s >> putStrLn "socket: closed") (`talk` addr)
- where
-  open = socket AF_INET Stream defaultProtocol
-  talk sock (addr :| _) = do
-    connect sock addr
-    sendAll sock (renderCommand 1 GetPlayers)
-    bytes <- recv sock 4096
-    print bytes
+    Right (addr :| _) -> withConnection addr $ \conn -> do
+      ch1 <- subscribe conn
+      ch2 <- subscribe conn
+      sendRaw conn $ renderCommand 1 GetPlayers
+      sendRaw conn $ renderCommand 2 (RegisterForChangeEvents On)
+      -- ячейка для хранения громкости
+      volumeRef <- newTVarIO (Nothing :: Maybe Int)
+      race_ (runPrinter ch1 `concurrently_` runVolTracker ch2 volumeRef) (runRemote conn volumeRef)
+     where
+      runPrinter ch = printer ch `finally` putStrLn "printer: stopped"
+      runVolTracker ch ref = volumeTracker ch ref `finally` putStrLn "volume tracker: stopped"
+      runRemote conn ref = remote conn ref 3 `finally` putStrLn "remote: stopped"
 
-    sendAll sock (renderCommand 2 (RegisterForChangeEvents On))
-    -- ячейка для хранения громкости
-    volumeRef <- newTVarIO (Nothing :: Maybe Int)
-    -- параллельный запуск вывода на экран и пульта управления в отдельных потоках
-    -- оба потока закрываются при завершении одного из них (нажатие "q")
-    race_
-      (readLoop volumeRef sock "" `finally` putStrLn "reader: stopped")
-      (remote volumeRef 0 sock `finally` putStrLn "remote: stopped")
+printer :: TChan HeosEvent -> IO Void
+printer ch = forever $ do
+  event <- atomically $ readTChan ch
+  print event
 
--- Этап 13 - Чтение в цикле
-readLoop :: TVar (Maybe Int) -> Socket -> ByteString -> IO ()
-readLoop volumeRef sock buffer = do
-  chunk <- recv sock 4096
-  let (complete, rest) = splitLines (buffer <> chunk)
-  forM_ complete $ \bs -> do
-    let eitherIncEnv = classifyEnvelope <$> eitherDecodeStrict @Envelope bs
-    case eitherIncEnv of
-      Right (IncomingEvent (HeosEvent "player_volume_changed" params) _) -> do
-        let mbVolume = lookupParam "level" params >>= readMaybe @Int . T.unpack
-        -- Этап 15 - Изменяемые ячейки
-        atomically $ writeTVar volumeRef mbVolume
-      _ -> print bs
-  readLoop volumeRef sock rest
+volumeTracker :: TChan HeosEvent -> TVar (Maybe Int) -> IO Void
+volumeTracker ch volumeRef = forever $ do
+  event <- atomically $ readTChan ch
+  case event of
+    HeosEvent "player_volume_changed" params -> do
+      let mbVolume = lookupParam "level" params >>= readMaybe . T.unpack
+      atomically $ writeTVar volumeRef mbVolume
+    _ -> pure ()
 
--- Этап 14 - Потоки
-remote :: TVar (Maybe Int) -> Int -> Socket -> IO ()
-remote volumeRef seqVal sock = do
+remote :: Connection -> TVar (Maybe Int) -> Int -> IO ()
+remote conn volumeRef seqId = do
   line <- getLine
   case line of
     "q" -> pure ()
     "v" -> do
       volume <- readTVarIO volumeRef
       putStrLn (maybe "Volume: unknown" (("Volume: " <>) . show) volume)
-      remote volumeRef seqVal sock
+      remote conn volumeRef seqId
     _ -> do
       case keyToCommand line of
-        Just cmd -> sendAll sock (renderCommand seqVal cmd)
+        Just cmd -> sendRaw conn $ renderCommand seqId cmd
         Nothing -> putStrLn "команды: + - play pause q v"
-      remote volumeRef (seqVal + 1) sock
+      remote conn volumeRef (seqId + 1)
 
 keyToCommand :: String -> Maybe Command
 keyToCommand cmd = case cmd of
