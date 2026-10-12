@@ -7,8 +7,8 @@ import Control.Monad (forever)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as T
 import Data.Void (Void)
-import Heos.Command (Command (..), renderCommand)
-import Heos.Connection (Connection, sendRaw, subscribe, withConnection)
+import Heos.Command (Command (..))
+import Heos.Connection (Connection, sendCommand, subscribe, withConnection)
 import Heos.Discovery (discover)
 import Heos.Envelope (HeosEvent (..))
 import Heos.Player (OnOff (On), PlayState (Pause, Play), PlayerId (PlayerId))
@@ -23,8 +23,8 @@ firstTalk =
     Right (addr :| _) -> withConnection addr $ \conn -> do
       ch1 <- subscribe conn
       ch2 <- subscribe conn
-      sendRaw conn $ renderCommand 1 GetPlayers
-      sendRaw conn $ renderCommand 2 (RegisterForChangeEvents On)
+      sendCommand conn GetPlayers 1 >>= print
+      sendCommand conn (RegisterForChangeEvents On) 2 >>= print
       -- ячейка для хранения громкости
       volumeRef <- newTVarIO (Nothing :: Maybe Int)
       race_ (runPrinter ch1 `concurrently_` runVolTracker ch2 volumeRef) (runRemote conn volumeRef)
@@ -58,7 +58,7 @@ remote conn volumeRef seqId = do
       remote conn volumeRef seqId
     _ -> do
       case keyToCommand line of
-        Just cmd -> sendRaw conn $ renderCommand seqId cmd
+        Just cmd -> sendCommand conn cmd seqId >>= print
         Nothing -> putStrLn "команды: + - play pause q v"
       remote conn volumeRef (seqId + 1)
 

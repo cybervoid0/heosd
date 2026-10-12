@@ -1,21 +1,23 @@
 module Heos.ConnectionSpec (spec) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.STM (TChan, atomically, readTChan)
+import Control.Concurrent.Async (concurrently)
+import Control.Concurrent.STM (TChan, atomically, readTChan, readTVarIO)
 import Control.Exception (bracket)
 import Control.Monad (forever)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Text.Encoding qualified as T
-import Heos.Connection.Internal (Connection, runConnection, splitLines, subscribe)
-import Heos.Envelope (HeosEvent (..))
+import Heos.Command (Command (..))
+import Heos.Connection.Internal (Connection (..), Waiting (..), runConnection, sendCommand, splitLines, subscribe)
+import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
 import Network.Socket (Family (AF_UNIX), Socket, SocketType (Stream), close, socketPair)
-import Network.Socket.ByteString (sendAll)
+import Network.Socket.ByteString (recv, sendAll)
 import System.Timeout (timeout)
 import Test.Hspec
-import Test.QuickCheck
+import Test.QuickCheck (Gen, choose, elements, forAll, listOf, (===))
 
 -- Bytes that make splitting interesting: plain letters plus both halves of
 -- the delimiter, so "\r\n", a lone "\r" and a lone "\n" all show up.
@@ -64,6 +66,37 @@ nextEvent :: TChan HeosEvent -> IO HeosEvent
 nextEvent ch =
   timeout 1000000 (atomically (readTChan ch))
     >>= maybe (fail "no event arrived within a second") pure
+
+getPlayersLine :: ByteString
+getPlayersLine =
+  "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"success\", \"message\": \"\"}, \"payload\": [{\"name\": \"Marantz MODEL 60n\", \"pid\": -1245882071}]}\r\n"
+
+heartBeatLine :: ByteString
+heartBeatLine =
+  "{\"heos\": {\"command\": \"system/heart_beat\", \"result\": \"success\", \"message\": \"\"}}\r\n"
+
+failedLine :: ByteString
+failedLine =
+  "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"fail\", \"message\": \"eid=2&text=ID Not Valid\"}}\r\n"
+
+-- Send a command and, from the device's side of the socket pair, answer it:
+-- wait for the command line, hand it to the check, then write the replies.
+-- Returns the reply sendCommand came back with. Bounded, so a lost reply
+-- fails the test instead of hanging it.
+exchange :: Connection -> Socket -> Command -> (ByteString -> IO ()) -> [ByteString] -> IO Envelope
+exchange conn theirs cmd check replies = do
+  (reply, ()) <-
+    concurrently
+      (timeout 1000000 (sendCommand conn cmd 7) >>= maybe (fail "no reply within a second") pure)
+      (recv theirs 4096 >>= check >> mapM_ (sendAll theirs) replies)
+  pure reply
+
+shouldBeWaitingFor :: Connection -> Bool -> Expectation
+shouldBeWaitingFor conn expected = do
+  w <- readTVarIO conn.waiting
+  case w of
+    Nobody -> expected `shouldBe` False
+    Someone _ -> expected `shouldBe` True
 
 spec :: Spec
 spec = do
@@ -122,6 +155,72 @@ spec = do
               close theirs
               forever (threadDelay 100000)
         timeout 2000000 stuck `shouldThrow` anyIOException
+
+  describe "sendCommand" $ do
+    it "sends the rendered command with its SEQUENCE and returns the reply" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          reply <-
+            exchange conn theirs GetPlayers
+              (\sent -> do
+                 sent `shouldSatisfy` BS.isPrefixOf "heos://player/get_players?"
+                 sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=7"
+                 sent `shouldSatisfy` BS.isSuffixOf "\r\n")
+              [getPlayersLine]
+          reply.heos.command `shouldBe` "player/get_players"
+          reply.heos.result `shouldBe` Just Success
+
+    -- The trap from stage 7: "command under process" is not the reply.
+    it "waits through a 'command under process' notice for the real reply" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          reply <- exchange conn theirs GetPlayers (const (pure ())) [pendingLine, getPlayersLine]
+          reply.heos.command `shouldBe` "player/get_players"
+          reply.heos.message `shouldBe` Just ""
+
+    -- A failed result is still the reply to this command; judging it is the
+    -- caller's job.
+    it "returns a failed reply as the reply, not as an error" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          reply <- exchange conn theirs GetPlayers (const (pure ())) [failedLine]
+          reply.heos.result `shouldBe` Just Fail
+          reply.heos.message `shouldBe` Just "eid=2&text=ID Not Valid"
+
+    it "nobody is waiting before a command and after its reply" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          conn `shouldBeWaitingFor` False
+          _ <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
+          conn `shouldBeWaitingFor` False
+
+    -- A reply nobody asked for must not be kept for the next command.
+    -- The pause lets the reader see the stray while nobody waits.
+    it "drops a stray reply instead of handing it to the next command" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          sendAll theirs getPlayersLine
+          threadDelay 100000
+          reply <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
+          reply.heos.command `shouldBe` "system/heart_beat"
+
+    it "still delivers events that arrive while a command is waiting" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          ch <- subscribe conn
+          reply <-
+            exchange conn theirs GetPlayers (const (pure ()))
+              [eventLine "player_volume_changed" "pid=1&level=3", getPlayersLine]
+          reply.heos.command `shouldBe` "player/get_players"
+          nextEvent ch `shouldReturn` volumeEvent "3"
+
+    it "serves two commands one after another" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          first' <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
+          second <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
+          first'.heos.command `shouldBe` "player/get_players"
+          second.heos.command `shouldBe` "system/heart_beat"
 
   describe "splitLines" $ do
     -- The three checks named in the roadmap.

@@ -180,6 +180,7 @@ test-suite heosd-test
                     , bytestring
                     , network
                     , stm
+                    , async
                     , hspec
                     , QuickCheck
                     , directory

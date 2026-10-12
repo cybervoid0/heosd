@@ -3,12 +3,14 @@ module Heos.Connection (
   withConnection,
   Connection,
   subscribe,
-  sendRaw,
+  Waiting (..),
+  sendCommand,
 ) where
 
 import Heos.Connection.Internal (
   Connection,
-  sendRaw,
+  Waiting (..),
+  sendCommand,
   splitLines,
   subscribe,
   withConnection,

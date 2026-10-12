@@ -136,12 +136,13 @@ spec = do
         `shouldBe` expect "heos://player/save_queue?pid=1&name=great, playlist"
 
     -- A line break inside a value ends the command early, and whatever
-    -- follows is read by the device as a second command. The spec does not
-    -- say how to escape it, so it needs a decision: reject such values, strip
-    -- them, or escape them some other way.
+    -- follows is read by the device as a second command. The spec has no
+    -- escape for it, so renderValue turns line breaks into spaces: the
+    -- value changes, but only one command ever reaches the device.
     it "a line break in a value cannot inject a second command" $ do
-      pendingWith "renderValue does not handle \\r or \\n yet"
-      T.count "\r\n" (wire (SaveQueue (PlayerId 1) "x\r\nheos://system/reboot")) `shouldBe` 1
+      let line = wire (SaveQueue (PlayerId 1) "x\r\nheos://system/reboot")
+      T.count "\r\n" line `shouldBe` 1
+      line `shouldBe` expect "heos://player/save_queue?pid=1&name=x  heos://system/reboot"
 
   describe "credentials" $ do
     it "show hides the password" $ do

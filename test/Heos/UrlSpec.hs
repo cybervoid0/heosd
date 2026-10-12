@@ -131,6 +131,15 @@ spec = do
   -- Parsing
   ----------------------------------------------------------------------------
 
+    -- Line breaks are the one thing the codec does not round-trip: there is
+    -- no escape for them in the protocol, and a bare one would end the
+    -- command early, so they become spaces on the way out.
+    it "replaces line breaks with spaces so a value cannot end the command" $ do
+      renderValue "a\r\nb" `shouldBe` "a  b"
+      renderValue "a\nb" `shouldBe` "a b"
+      renderValue "a\rb" `shouldBe` "a b"
+      renderValue "x\r\n" `shouldNotSatisfy` T.isInfixOf "\r"
+
   describe "decodeValue" $ do
     it "expands escape sequences" $ do
       decodeValue "AC/DC %26 Queen" `shouldBe` "AC/DC & Queen"
@@ -298,6 +307,8 @@ spec = do
 -- narrow and stuffed with reserved characters and fragments of escape
 -- sequences: a naive `T.pack <$> arbitrary` would essentially never emit '%',
 -- '2', '6' in a row, and those are precisely the inputs that break the codec.
+-- No line breaks on purpose: renderValue replaces them, so the round-trip
+-- property does not hold for them (see the example above).
 wireText :: Gen Text
 wireText = T.pack <$> listOf (elements "%&=?abc2356D ")
 

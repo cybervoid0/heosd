@@ -73,6 +73,8 @@ renderValue = T.concatMap replace
     '&' -> "%26"
     '%' -> "%25"
     '=' -> "%3D"
+    '\r' -> " "
+    '\n' -> " "
     c -> T.singleton c
 
 -- Split a command URL into its address and its parameters.
