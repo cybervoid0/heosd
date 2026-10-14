@@ -11,6 +11,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
@@ -19,6 +20,7 @@ import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), IncomingEn
 import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
 import Network.Socket.ByteString (recv, sendAll)
+import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
 data ConnectionError = ConnectionLost | ConnectionTimeout deriving (Show, Eq)
@@ -49,6 +51,7 @@ data Connection = Connection
   -- ^ the one SEQUENCE counter for this connection
   , sendLock :: MVar ()
   -- ^ one command in flight at a time; see 'sendCommand'
+  , commandTimeout :: Int
   }
 
 -- | Open a TCP connection to the device at the given address and run the
@@ -58,22 +61,23 @@ withConnection :: SockAddr -> (Connection -> IO a) -> IO a
 withConnection sockAddr act = bracket open close go
  where
   open = socket AF_INET Stream defaultProtocol
+  commandTimeout = 5000000
   go sock = do
     connect sock sockAddr
-    runConnection sock act
+    runConnection commandTimeout sock act
 
 -- | Run the action over an already connected socket: start the reader
 --   thread, hand out the 'Connection', and kill the reader when the action
 --   is done. If the reader dies first (the device closed the connection),
 --   the action is cancelled and the reader's error propagates. Takes a
 --   socket rather than an address so tests can pass one end of a socket pair.
-runConnection :: Socket -> (Connection -> IO a) -> IO a
-runConnection sock act = do
+runConnection :: Int -> Socket -> (Connection -> IO a) -> IO a
+runConnection commandTimeout sock act = do
   events <- newBroadcastTChanIO
   waiting <- newTVarIO Map.empty
   nextSeq <- newTVarIO @Int 0
   sendLock <- newMVar ()
-  let conn = Connection{sock, events, waiting, nextSeq, sendLock}
+  let conn = Connection{sock, events, waiting, nextSeq, sendLock, commandTimeout}
   res <- race (reader conn) (act conn)
   either absurd pure res
 
@@ -147,9 +151,12 @@ sendCommand conn cmd = withMVar conn.sendLock $ \_ -> do
   open seqNo box = atomically $ modifyTVar' conn.waiting (Map.insert seqNo box)
   -- в завершении или при обрыве соединения - удалить ячейку
   closeBox seqNo = atomically $ modifyTVar' conn.waiting (Map.delete seqNo)
-  go seqNo box = do
-    sent <- try @IOException $ sendAll conn.sock (renderCommand seqNo cmd)
-    either
-      (\_ -> pure (Left ConnectionLost))
-      (\_ -> atomically $ takeTMVar box)
-      sent
+  go seqNo box =
+    try @IOException (sendAll conn.sock $ renderCommand seqNo cmd) >>= \case
+      Left _ -> pure $ Left ConnectionLost
+      -- Это частично примененный fromMaybe у которого остался один аргумент
+      -- и его применяют через fmap к IO Maybe, возвращаемом таймаутом.
+      -- И всё это нужно чтобы не писать do и сократить одну строчку
+      -- И работает это только потому что fromMaybe - чистая функция,
+      -- иначе пришлось бы писать >>= (bind) или do
+      Right _ -> fromMaybe (Left ConnectionTimeout) <$> timeout conn.commandTimeout (atomically $ takeTMVar box)

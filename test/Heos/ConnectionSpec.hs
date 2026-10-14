@@ -98,6 +98,11 @@ exchange conn theirs cmd check replies = do
       (recv theirs 4096 >>= check >> mapM_ (sendAll theirs) replies)
   pure reply
 
+-- runConnection with a one-second command timeout: long enough for a fake
+-- device that answers at once, short enough to fail a test rather than hang it.
+run :: Socket -> (Connection -> IO a) -> IO a
+run = runConnection 1000000
+
 -- The tests here expect the device to answer; a Left is a failure.
 unwrap :: Either ConnectionError Envelope -> IO Envelope
 unwrap = either (\e -> fail ("sendCommand failed: " <> show e)) pure
@@ -111,11 +116,11 @@ spec = do
   describe "runConnection" $ do
     it "returns what the action returns" $
       withSocketPair $ \(ours, _) ->
-        runConnection ours (\_ -> pure (42 :: Int)) `shouldReturn` 42
+        run ours (\_ -> pure (42 :: Int)) `shouldReturn` 42
 
     it "delivers events to a subscriber in the order they arrived" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           ch <- subscribe conn
           sendAll theirs (eventLine "player_volume_changed" "pid=1&level=20")
           sendAll theirs (eventLine "player_volume_changed" "pid=1&level=21")
@@ -127,7 +132,7 @@ spec = do
     -- stdout; that line in the test output is expected.)
     it "passes only events to subscribers, not responses or pending notices" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           ch <- subscribe conn
           sendAll theirs responseLine
           sendAll theirs pendingLine
@@ -138,7 +143,7 @@ spec = do
     -- still one line. Two writes with a pause in between force two recvs.
     it "reassembles an event that arrived in two pieces" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           ch <- subscribe conn
           let (firstHalf, secondHalf) = BS.splitAt 30 (eventLine "player_volume_changed" "pid=1&level=7")
           sendAll theirs firstHalf
@@ -148,7 +153,7 @@ spec = do
 
     it "gives every subscriber its own copy of each event" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           ch1 <- subscribe conn
           ch2 <- subscribe conn
           sendAll theirs (eventLine "player_volume_changed" "pid=1&level=5")
@@ -159,7 +164,7 @@ spec = do
     -- error, not leave the action waiting forever (and not spin the reader).
     it "fails, and stops the action, when the device closes the connection" $
       withSocketPair $ \(ours, theirs) -> do
-        let stuck = runConnection ours $ \(_ :: Connection) -> do
+        let stuck = run ours $ \(_ :: Connection) -> do
               close theirs
               forever (threadDelay 100000)
         timeout 2000000 stuck `shouldThrow` anyIOException
@@ -167,7 +172,7 @@ spec = do
   describe "sendCommand" $ do
     it "sends the rendered command with its SEQUENCE and returns the reply" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           reply <-
             exchange conn theirs GetPlayers
               (\sent -> do
@@ -181,7 +186,7 @@ spec = do
     -- The trap from stage 7: "command under process" is not the reply.
     it "waits through a 'command under process' notice for the real reply" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           reply <- exchange conn theirs GetPlayers (const (pure ())) [pendingLine, getPlayersLine]
           reply.heos.command `shouldBe` "player/get_players"
           reply.heos.message `shouldBe` Just ""
@@ -190,21 +195,21 @@ spec = do
     -- caller's job.
     it "returns a failed reply as the reply, not as an error" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           reply <- exchange conn theirs GetPlayers (const (pure ())) [failedLine]
           reply.heos.result `shouldBe` Just Fail
           reply.heos.message `shouldBe` Just "eid=2&text=ID Not Valid"
 
     it "nothing is in flight before a command and after its reply" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           inFlight conn `shouldReturn` 0
           _ <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
           inFlight conn `shouldReturn` 0
 
     it "numbers commands from one counter, in order" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           _ <- exchange conn theirs HeartBeat (\sent -> sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=0") [heartBeatLine]
           _ <- exchange conn theirs HeartBeat (\sent -> sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=1") [heartBeatLine]
           _ <- exchange conn theirs GetPlayers (\sent -> sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=2") [getPlayersLine]
@@ -214,7 +219,7 @@ spec = do
     -- not be handed to whoever waits next.
     it "drops a reply with a SEQUENCE nobody is waiting for" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           let late = "{\"heos\": {\"command\": \"player/get_volume\", \"result\": \"success\", \"message\": \"pid=1&level=10&SEQUENCE=99\"}}\r\n"
           answer <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [late, volumeReply 0]
           answer.heos.message `shouldBe` Just "pid=1&level=10&SEQUENCE=0"
@@ -224,14 +229,14 @@ spec = do
     -- reads and the next command would be routed by a map with ghosts in it.
     it "removes its box from the map when the wait is cancelled" $
       withSocketPair $ \(ours, _) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           gaveUp <- timeout 100000 (sendCommand conn HeartBeat)
           gaveUp `shouldSatisfy` isNothing
           inFlight conn `shouldReturn` 0
 
     it "lets the next command through after a cancelled one" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           _ <- timeout 100000 (sendCommand conn HeartBeat)
           _ <- recv theirs 4096 -- the device swallows the abandoned command
           answer <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
@@ -241,7 +246,7 @@ spec = do
     -- still reach the device one at a time, and each gets its own reply.
     it "serialises concurrent commands and gives each its own reply" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           let bounded cmd = timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") unwrap
               device = do
                 first' <- recv theirs 4096
@@ -257,7 +262,7 @@ spec = do
     -- The pause lets the reader see the stray while nobody waits.
     it "drops a stray reply instead of handing it to the next command" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           sendAll theirs getPlayersLine
           threadDelay 100000
           reply <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
@@ -265,7 +270,7 @@ spec = do
 
     it "still delivers events that arrive while a command is waiting" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           ch <- subscribe conn
           reply <-
             exchange conn theirs GetPlayers (const (pure ()))
@@ -275,7 +280,7 @@ spec = do
 
     it "serves two commands one after another" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           first' <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
           second <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
           first'.heos.command `shouldBe` "player/get_players"
@@ -290,7 +295,7 @@ spec = do
       withSocketPair $ \(ours, theirs) -> do
         result <- newEmptyMVar
         connVar <- newEmptyMVar
-        outcome <- timeout 2000000 $ try @SomeException $ runConnection ours $ \conn -> do
+        outcome <- timeout 2000000 $ try @SomeException $ run ours $ \conn -> do
           putMVar connVar conn
           _ <- forkIO (sendCommand conn HeartBeat >>= putMVar result)
           threadDelay 100000 -- let it register its box and send
@@ -304,7 +309,7 @@ spec = do
     it "a command still waiting when the action ends gets Left ConnectionLost" $
       withSocketPair $ \(ours, _) -> do
         result <- newEmptyMVar
-        runConnection ours $ \conn -> do
+        run ours $ \conn -> do
           _ <- forkIO (sendCommand conn HeartBeat >>= putMVar result)
           threadDelay 100000
         -- runConnection returned: the reader was cancelled and failed the waiter
@@ -316,11 +321,32 @@ spec = do
     it "a command sent after the device went away fails with Left ConnectionLost" $
       withSocketPair $ \(ours, theirs) -> do
         result <- newEmptyMVar
-        _ <- timeout 2000000 $ try @SomeException $ runConnection ours $ \conn -> do
+        _ <- timeout 2000000 $ try @SomeException $ run ours $ \conn -> do
           _ <- forkIO (threadDelay 100000 >> sendCommand conn HeartBeat >>= putMVar result)
           close theirs
           forever (threadDelay 100000) :: IO ()
         timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
+
+  -- Stage 21. A 100 ms timeout here; the daemon uses 5 s.
+  describe "when the device is silent" $ do
+    it "gives up with Left ConnectionTimeout and leaves nothing in flight" $
+      withSocketPair $ \(ours, _) ->
+        runConnection 100000 ours $ \conn -> do
+          outcome <- timeout 2000000 (sendCommand conn HeartBeat)
+          outcome `shouldBe` Just (Left ConnectionTimeout)
+          inFlight conn `shouldReturn` 0
+
+    -- The reply to the abandoned command turns up late: nobody waits for it
+    -- any more, so it is dropped, and the next command gets its own reply.
+    it "drops the late reply and serves the next command" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection 100000 ours $ \conn -> do
+          _ <- sendCommand conn HeartBeat
+          _ <- recv theirs 4096 -- the device finally reads the abandoned command...
+          sendAll theirs heartBeatLine -- ...and answers it, too late
+          threadDelay 50000
+          answer <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
+          answer.heos.command `shouldBe` "player/get_players"
 
   describe "findBox" $ do
     let boxes = Map.fromList [(7, 'a'), (8, 'b')]
