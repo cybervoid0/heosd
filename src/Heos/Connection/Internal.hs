@@ -2,8 +2,8 @@ module Heos.Connection.Internal where
 
 import Control.Concurrent (MVar, newMVar, withMVar)
 import Control.Concurrent.Async (race)
-import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, putTMVar, readTVar, stateTVar, takeTMVar, writeTChan)
-import Control.Exception (bracket, bracket_, throwIO)
+import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, putTMVar, readTVar, stateTVar, takeTMVar, tryPutTMVar, writeTChan, writeTVar)
+import Control.Exception (IOException, bracket, bracket_, finally, throwIO, try)
 import Control.Monad (forM_, unless, when)
 import Data.Aeson (eitherDecodeStrict)
 import Data.Bifunctor (Bifunctor (first))
@@ -20,6 +20,9 @@ import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
 import Network.Socket.ByteString (recv, sendAll)
 import Text.Read (readMaybe)
+
+data ConnectionError = ConnectionLost | ConnectionTimeout deriving (Show, Eq)
+type EitherEnvelope = Either ConnectionError Envelope
 
 -- | Split a chunk of the socket stream into complete lines and the unfinished
 --   tail. Lines are delimited by **\\r\\n**, which is dropped. The tail has no
@@ -40,7 +43,7 @@ data Connection = Connection
   { sock :: Socket
   , events :: TChan HeosEvent
   -- ^ broadcast: the reader writes, subscribers read their own copies via 'subscribe'
-  , waiting :: TVar (Map Int (TMVar Envelope))
+  , waiting :: TVar (Map Int (TMVar EitherEnvelope))
   -- ^ commands in flight, by SEQUENCE: where the reader puts each reply
   , nextSeq :: TVar Int
   -- ^ the one SEQUENCE counter for this connection
@@ -82,10 +85,11 @@ runConnection sock act = do
 --   Never returns; an empty recv means the device closed the connection,
 --   and that is an error, not a reason to spin.
 reader :: Connection -> IO Void
-reader conn = go ""
+reader conn = go "" `finally` failAll
  where
   go buffer = do
     chunk <- recv conn.sock 4096
+    -- пустой `recv` — это конец потока; бросить исключение, а не продолжать
     when (BS.null chunk) $ throwIO (userError "connection closed by device")
     let (complete, rest) = splitLines (buffer <> chunk)
     forM_ complete $ \bs -> do
@@ -97,11 +101,15 @@ reader conn = go ""
           delivered <- atomically $ do
             mapIntBox <- readTVar conn.waiting
             let mbBox = findBox env.heos.message mapIntBox
-            -- если нужная ячейка найдена, кладём ответ в неё
-            maybe (pure False) (\box -> True <$ putTMVar box env) mbBox
+            maybe (pure False) (\box -> True <$ putTMVar box (Right env)) mbBox
           unless delivered $ putStrLn ("stray reply: " <> show env)
         Left err -> print $ show bs <> err
     go rest
+  -- при любом завершении (`finally`): пройти по всей карте, положить в каждую коробочку `Left ConnectionLost`, карту очистить.
+  failAll = atomically $ do
+    boxes <- readTVar conn.waiting
+    forM_ boxes $ \box -> tryPutTMVar box (Left ConnectionLost)
+    writeTVar conn.waiting Map.empty
 
 -- | Which waiting box a reply belongs to. A reply carries SEQUENCE only
 --   when the command had arguments of its own (the device echoes them);
@@ -129,7 +137,7 @@ subscribe conn = atomically $ dupTChan conn.events
 --   is registered under the SEQUENCE number before sending, otherwise a
 --   fast reply could arrive before anyone waits for it, and removed by the
 --   bracket however the wait ends: reply, timeout or cancellation.
-sendCommand :: Connection -> Command -> IO Envelope
+sendCommand :: Connection -> Command -> IO EitherEnvelope
 sendCommand conn cmd = withMVar conn.sendLock $ \_ -> do
   seqNo <- atomically $ stateTVar conn.nextSeq (\n -> (n, n + 1))
   box <- newEmptyTMVarIO
@@ -140,5 +148,8 @@ sendCommand conn cmd = withMVar conn.sendLock $ \_ -> do
   -- в завершении или при обрыве соединения - удалить ячейку
   closeBox seqNo = atomically $ modifyTVar' conn.waiting (Map.delete seqNo)
   go seqNo box = do
-    sendAll conn.sock (renderCommand seqNo cmd) -- отправили команду в сокет
-    atomically $ takeTMVar box -- ждём ответа и возвращаем его содержимое из ячейки
+    sent <- try @IOException $ sendAll conn.sock (renderCommand seqNo cmd)
+    either
+      (\_ -> pure (Left ConnectionLost))
+      (\_ -> atomically $ takeTMVar box)
+      sent

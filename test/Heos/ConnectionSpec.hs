@@ -1,9 +1,9 @@
 module Heos.ConnectionSpec (spec) where
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async (concurrently)
 import Control.Concurrent.STM (TChan, atomically, readTChan, readTVarIO)
-import Control.Exception (bracket)
+import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forever)
 import Data.ByteString (ByteString)
 import Data.Maybe (isNothing)
@@ -13,7 +13,7 @@ import Data.Text.Encoding qualified as T
 import Heos.Command (Command (..))
 import Heos.Player (PlayerId (..))
 import Data.Map.Strict qualified as Map
-import Heos.Connection.Internal (Connection (..), findBox, runConnection, sendCommand, splitLines, subscribe)
+import Heos.Connection.Internal (Connection (..), ConnectionError (..), findBox, runConnection, sendCommand, splitLines, subscribe)
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
 import Network.Socket (Family (AF_UNIX), Socket, SocketType (Stream), close, socketPair)
@@ -94,9 +94,13 @@ exchange :: Connection -> Socket -> Command -> (ByteString -> IO ()) -> [ByteStr
 exchange conn theirs cmd check replies = do
   (reply, ()) <-
     concurrently
-      (timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") pure)
+      (timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") unwrap)
       (recv theirs 4096 >>= check >> mapM_ (sendAll theirs) replies)
   pure reply
+
+-- The tests here expect the device to answer; a Left is a failure.
+unwrap :: Either ConnectionError Envelope -> IO Envelope
+unwrap = either (\e -> fail ("sendCommand failed: " <> show e)) pure
 
 -- How many commands are in flight right now.
 inFlight :: Connection -> IO Int
@@ -238,7 +242,7 @@ spec = do
     it "serialises concurrent commands and gives each its own reply" $
       withSocketPair $ \(ours, theirs) ->
         runConnection ours $ \conn -> do
-          let bounded cmd = timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") pure
+          let bounded cmd = timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") unwrap
               device = do
                 first' <- recv theirs 4096
                 sendAll theirs (if "heart_beat" `BS.isInfixOf` first' then heartBeatLine else getPlayersLine)
@@ -276,6 +280,47 @@ spec = do
           second <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
           first'.heos.command `shouldBe` "player/get_players"
           second.heos.command `shouldBe` "system/heart_beat"
+
+  -- Stage 20. The waiters here run in threads of their own, outside the
+  -- race inside runConnection, the way heartbeat and MCP handlers will:
+  -- nobody cancels them, so the only way they learn the link is gone is
+  -- the Left the reader puts into their boxes on its way out.
+  describe "when the connection dies" $ do
+    it "a command waiting for its reply gets Left ConnectionLost, not a hang" $
+      withSocketPair $ \(ours, theirs) -> do
+        result <- newEmptyMVar
+        connVar <- newEmptyMVar
+        outcome <- timeout 2000000 $ try @SomeException $ runConnection ours $ \conn -> do
+          putMVar connVar conn
+          _ <- forkIO (sendCommand conn HeartBeat >>= putMVar result)
+          threadDelay 100000 -- let it register its box and send
+          close theirs -- the device goes away
+          forever (threadDelay 100000) :: IO ()
+        outcome `shouldSatisfy` \o -> case o of Just (Left _) -> True; _ -> False
+        timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
+        conn <- takeMVar connVar
+        inFlight conn `shouldReturn` 0
+
+    it "a command still waiting when the action ends gets Left ConnectionLost" $
+      withSocketPair $ \(ours, _) -> do
+        result <- newEmptyMVar
+        runConnection ours $ \conn -> do
+          _ <- forkIO (sendCommand conn HeartBeat >>= putMVar result)
+          threadDelay 100000
+        -- runConnection returned: the reader was cancelled and failed the waiter
+        timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
+
+    -- The sender is forked first and sends only once the reader is gone:
+    -- closing the socket ends runConnection at once, so nothing can be
+    -- forked after that from inside the action.
+    it "a command sent after the device went away fails with Left ConnectionLost" $
+      withSocketPair $ \(ours, theirs) -> do
+        result <- newEmptyMVar
+        _ <- timeout 2000000 $ try @SomeException $ runConnection ours $ \conn -> do
+          _ <- forkIO (threadDelay 100000 >> sendCommand conn HeartBeat >>= putMVar result)
+          close theirs
+          forever (threadDelay 100000) :: IO ()
+        timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
 
   describe "findBox" $ do
     let boxes = Map.fromList [(7, 'a'), (8, 'b')]
