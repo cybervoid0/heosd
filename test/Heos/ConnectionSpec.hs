@@ -6,6 +6,7 @@ import Control.Concurrent.STM (TChan, atomically, readTChan, readTVarIO)
 import Control.Exception (bracket)
 import Control.Monad (forever)
 import Data.ByteString (ByteString)
+import Data.Maybe (isNothing)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Text.Encoding qualified as T
@@ -213,6 +214,24 @@ spec = do
           let late = "{\"heos\": {\"command\": \"player/get_volume\", \"result\": \"success\", \"message\": \"pid=1&level=10&SEQUENCE=99\"}}\r\n"
           answer <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [late, volumeReply 0]
           answer.heos.message `shouldBe` Just "pid=1&level=10&SEQUENCE=0"
+
+    -- Stage 19: whoever gives up waiting (a timeout, a cancelled thread)
+    -- must leave nothing behind, or a late reply would find a box nobody
+    -- reads and the next command would be routed by a map with ghosts in it.
+    it "removes its box from the map when the wait is cancelled" $
+      withSocketPair $ \(ours, _) ->
+        runConnection ours $ \conn -> do
+          gaveUp <- timeout 100000 (sendCommand conn HeartBeat)
+          gaveUp `shouldSatisfy` isNothing
+          inFlight conn `shouldReturn` 0
+
+    it "lets the next command through after a cancelled one" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          _ <- timeout 100000 (sendCommand conn HeartBeat)
+          _ <- recv theirs 4096 -- the device swallows the abandoned command
+          answer <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
+          answer.heos.command `shouldBe` "player/get_players"
 
     -- The lock serialises commands, so two concurrent sendCommand calls
     -- still reach the device one at a time, and each gets its own reply.

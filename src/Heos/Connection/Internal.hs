@@ -3,7 +3,7 @@ module Heos.Connection.Internal where
 import Control.Concurrent (MVar, newMVar, withMVar)
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, putTMVar, readTVar, stateTVar, takeTMVar, writeTChan)
-import Control.Exception (bracket, throwIO)
+import Control.Exception (bracket, bracket_, throwIO)
 import Control.Monad (forM_, unless, when)
 import Data.Aeson (eitherDecodeStrict)
 import Data.Bifunctor (Bifunctor (first))
@@ -127,21 +127,18 @@ subscribe conn = atomically $ dupTChan conn.events
 --   exchange, so commands go one at a time: replies without SEQUENCE
 --   (get_players, heart_beat) can then only mean the one in flight. The box
 --   is registered under the SEQUENCE number before sending, otherwise a
---   fast reply could arrive before anyone waits for it, and removed in the
---   same transaction that takes the reply out.
+--   fast reply could arrive before anyone waits for it, and removed by the
+--   bracket however the wait ends: reply, timeout or cancellation.
 sendCommand :: Connection -> Command -> IO Envelope
 sendCommand conn cmd = withMVar conn.sendLock $ \_ -> do
-  -- взять следующий номер
   seqNo <- atomically $ stateTVar conn.nextSeq (\n -> (n, n + 1))
-  -- создать пустую ячейку
   box <- newEmptyTMVarIO
-  -- положить созданную ячейку в карту под новым номером
-  atomically $ modifyTVar' conn.waiting (Map.insert seqNo box)
-  -- послать команду устройству в сокет в виде ByteString
-  sendAll conn.sock (renderCommand seqNo cmd)
-  -- дождаться пока в ячейке появится значение
-  atomically $ do
-    env <- takeTMVar box
-    -- удалить конверт из карты
-    modifyTVar' conn.waiting (Map.delete seqNo)
-    pure env
+  bracket_ (open seqNo box) (closeBox seqNo) (go seqNo box)
+ where
+  -- кладём в карту пустую ячейку под будущий ответ от устройства
+  open seqNo box = atomically $ modifyTVar' conn.waiting (Map.insert seqNo box)
+  -- в завершении или при обрыве соединения - удалить ячейку
+  closeBox seqNo = atomically $ modifyTVar' conn.waiting (Map.delete seqNo)
+  go seqNo box = do
+    sendAll conn.sock (renderCommand seqNo cmd) -- отправили команду в сокет
+    atomically $ takeTMVar box -- ждём ответа и возвращаем его содержимое из ячейки
