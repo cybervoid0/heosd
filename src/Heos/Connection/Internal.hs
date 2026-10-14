@@ -108,9 +108,9 @@ reader conn = go ""
 --   without it, the reply can only be for the single command in flight,
 --   which 'sendLock' guarantees. Nothing means nobody is waiting for it.
 findBox :: Maybe Text -> Map Int box -> Maybe box
-findBox mbSeqTxt mapIntBox = case seqNo of
-  Just sn -> Map.lookup sn mapIntBox -- ответ с номером: его коробочка
-  Nothing -> case Map.elems mapIntBox of -- без номера: единственная в полёте
+findBox mbSeqTxt boxes = case seqNo of
+  Just sn -> Map.lookup sn boxes -- ответ с номером: его коробочка
+  Nothing -> case Map.elems boxes of -- без номера: единственная в полёте
     [box] -> Just box
     _ -> Nothing
  where
