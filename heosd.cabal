@@ -114,21 +114,11 @@ library
                   , mcp-server
                   , effectful
                   , retry
+                  , containers
                   
         
     -- Directories containing source files.
     hs-source-dirs:   src
-
-library lessons
-    import:          defaults
-    visibility:      private
-    hs-source-dirs:  lessons
-    exposed-modules: Demo
-                     ComplexDemo
-                     DataKinds
-                     Gadts
-    build-depends:   effectful
-                   , mtl
 
 executable heosd
     import:           defaults
@@ -186,3 +176,4 @@ test-suite heosd-test
                     , directory
                     , filepath
                     , aeson
+                    , containers

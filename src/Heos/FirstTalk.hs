@@ -23,15 +23,15 @@ firstTalk =
     Right (addr :| _) -> withConnection addr $ \conn -> do
       ch1 <- subscribe conn
       ch2 <- subscribe conn
-      sendCommand conn GetPlayers 1 >>= print
-      sendCommand conn (RegisterForChangeEvents On) 2 >>= print
+      sendCommand conn GetPlayers >>= print
+      sendCommand conn (RegisterForChangeEvents On) >>= print
       -- ячейка для хранения громкости
       volumeRef <- newTVarIO (Nothing :: Maybe Int)
       race_ (runPrinter ch1 `concurrently_` runVolTracker ch2 volumeRef) (runRemote conn volumeRef)
      where
       runPrinter ch = printer ch `finally` putStrLn "printer: stopped"
       runVolTracker ch ref = volumeTracker ch ref `finally` putStrLn "volume tracker: stopped"
-      runRemote conn ref = remote conn ref 3 `finally` putStrLn "remote: stopped"
+      runRemote conn ref = remote conn ref `finally` putStrLn "remote: stopped"
 
 printer :: TChan HeosEvent -> IO Void
 printer ch = forever $ do
@@ -47,20 +47,20 @@ volumeTracker ch volumeRef = forever $ do
       atomically $ writeTVar volumeRef mbVolume
     _ -> pure ()
 
-remote :: Connection -> TVar (Maybe Int) -> Int -> IO ()
-remote conn volumeRef seqId = do
+remote :: Connection -> TVar (Maybe Int) -> IO ()
+remote conn volumeRef = do
   line <- getLine
   case line of
     "q" -> pure ()
     "v" -> do
       volume <- readTVarIO volumeRef
       putStrLn (maybe "Volume: unknown" (("Volume: " <>) . show) volume)
-      remote conn volumeRef seqId
+      remote conn volumeRef
     _ -> do
       case keyToCommand line of
-        Just cmd -> sendCommand conn cmd seqId >>= print
+        Just cmd -> sendCommand conn cmd >>= print
         Nothing -> putStrLn "команды: + - play pause q v"
-      remote conn volumeRef (seqId + 1)
+      remote conn volumeRef
 
 keyToCommand :: String -> Maybe Command
 keyToCommand cmd = case cmd of

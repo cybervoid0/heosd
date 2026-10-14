@@ -10,7 +10,9 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Text.Encoding qualified as T
 import Heos.Command (Command (..))
-import Heos.Connection.Internal (Connection (..), Waiting (..), runConnection, sendCommand, splitLines, subscribe)
+import Heos.Player (PlayerId (..))
+import Data.Map.Strict qualified as Map
+import Heos.Connection.Internal (Connection (..), findBox, runConnection, sendCommand, splitLines, subscribe)
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
 import Network.Socket (Family (AF_UNIX), Socket, SocketType (Stream), close, socketPair)
@@ -75,6 +77,10 @@ heartBeatLine :: ByteString
 heartBeatLine =
   "{\"heos\": {\"command\": \"system/heart_beat\", \"result\": \"success\", \"message\": \"\"}}\r\n"
 
+volumeReply :: Int -> ByteString
+volumeReply n =
+  "{\"heos\": {\"command\": \"player/get_volume\", \"result\": \"success\", \"message\": \"pid=1&level=10&SEQUENCE=" <> BC.pack (show n) <> "\"}}\r\n"
+
 failedLine :: ByteString
 failedLine =
   "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"fail\", \"message\": \"eid=2&text=ID Not Valid\"}}\r\n"
@@ -87,16 +93,13 @@ exchange :: Connection -> Socket -> Command -> (ByteString -> IO ()) -> [ByteStr
 exchange conn theirs cmd check replies = do
   (reply, ()) <-
     concurrently
-      (timeout 1000000 (sendCommand conn cmd 7) >>= maybe (fail "no reply within a second") pure)
+      (timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") pure)
       (recv theirs 4096 >>= check >> mapM_ (sendAll theirs) replies)
   pure reply
 
-shouldBeWaitingFor :: Connection -> Bool -> Expectation
-shouldBeWaitingFor conn expected = do
-  w <- readTVarIO conn.waiting
-  case w of
-    Nobody -> expected `shouldBe` False
-    Someone _ -> expected `shouldBe` True
+-- How many commands are in flight right now.
+inFlight :: Connection -> IO Int
+inFlight conn = Map.size <$> readTVarIO conn.waiting
 
 spec :: Spec
 spec = do
@@ -164,7 +167,7 @@ spec = do
             exchange conn theirs GetPlayers
               (\sent -> do
                  sent `shouldSatisfy` BS.isPrefixOf "heos://player/get_players?"
-                 sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=7"
+                 sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=0"
                  sent `shouldSatisfy` BS.isSuffixOf "\r\n")
               [getPlayersLine]
           reply.heos.command `shouldBe` "player/get_players"
@@ -187,12 +190,45 @@ spec = do
           reply.heos.result `shouldBe` Just Fail
           reply.heos.message `shouldBe` Just "eid=2&text=ID Not Valid"
 
-    it "nobody is waiting before a command and after its reply" $
+    it "nothing is in flight before a command and after its reply" $
       withSocketPair $ \(ours, theirs) ->
         runConnection ours $ \conn -> do
-          conn `shouldBeWaitingFor` False
+          inFlight conn `shouldReturn` 0
           _ <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
-          conn `shouldBeWaitingFor` False
+          inFlight conn `shouldReturn` 0
+
+    it "numbers commands from one counter, in order" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          _ <- exchange conn theirs HeartBeat (\sent -> sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=0") [heartBeatLine]
+          _ <- exchange conn theirs HeartBeat (\sent -> sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=1") [heartBeatLine]
+          _ <- exchange conn theirs GetPlayers (\sent -> sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=2") [getPlayersLine]
+          pure ()
+
+    -- A reply whose SEQUENCE nobody waits for (late, after a timeout) must
+    -- not be handed to whoever waits next.
+    it "drops a reply with a SEQUENCE nobody is waiting for" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          let late = "{\"heos\": {\"command\": \"player/get_volume\", \"result\": \"success\", \"message\": \"pid=1&level=10&SEQUENCE=99\"}}\r\n"
+          answer <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [late, volumeReply 0]
+          answer.heos.message `shouldBe` Just "pid=1&level=10&SEQUENCE=0"
+
+    -- The lock serialises commands, so two concurrent sendCommand calls
+    -- still reach the device one at a time, and each gets its own reply.
+    it "serialises concurrent commands and gives each its own reply" $
+      withSocketPair $ \(ours, theirs) ->
+        runConnection ours $ \conn -> do
+          let bounded cmd = timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") pure
+              device = do
+                first' <- recv theirs 4096
+                sendAll theirs (if "heart_beat" `BS.isInfixOf` first' then heartBeatLine else getPlayersLine)
+                second <- recv theirs 4096
+                sendAll theirs (if "heart_beat" `BS.isInfixOf` second then heartBeatLine else getPlayersLine)
+          ((a, b), ()) <- concurrently (concurrently (bounded HeartBeat) (bounded GetPlayers)) device
+          a.heos.command `shouldBe` "system/heart_beat"
+          b.heos.command `shouldBe` "player/get_players"
+          inFlight conn `shouldReturn` 0
 
     -- A reply nobody asked for must not be kept for the next command.
     -- The pause lets the reader see the stray while nobody waits.
@@ -221,6 +257,34 @@ spec = do
           second <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
           first'.heos.command `shouldBe` "player/get_players"
           second.heos.command `shouldBe` "system/heart_beat"
+
+  describe "findBox" $ do
+    let boxes = Map.fromList [(7, 'a'), (8, 'b')]
+
+    it "picks the box with the reply's SEQUENCE" $ do
+      findBox (Just "pid=1&level=3&SEQUENCE=8") boxes `shouldBe` Just 'b'
+      findBox (Just "SEQUENCE=7&pid=1") boxes `shouldBe` Just 'a'
+
+    it "finds nothing for a SEQUENCE nobody is waiting for" $
+      findBox (Just "pid=1&SEQUENCE=9") boxes `shouldBe` Nothing
+
+    -- No SEQUENCE: the reply can only be for the single command in flight.
+    it "without a SEQUENCE picks the one box in flight" $
+      findBox (Just "") (Map.singleton 3 'c') `shouldBe` Just 'c'
+
+    it "without a SEQUENCE and no message still picks the one box in flight" $
+      findBox Nothing (Map.singleton 3 'c') `shouldBe` Just 'c'
+
+    -- Guessing between several would hand a reply to the wrong command.
+    it "without a SEQUENCE and several in flight refuses to guess" $
+      findBox (Just "") boxes `shouldBe` Nothing
+
+    it "without a SEQUENCE and nothing in flight finds nothing" $
+      findBox (Just "") (Map.empty :: Map.Map Int Char) `shouldBe` Nothing
+
+    -- A SEQUENCE that isn't a number is as good as none.
+    it "treats a non-numeric SEQUENCE as absent" $
+      findBox (Just "pid=1&SEQUENCE=abc") (Map.singleton 3 'c') `shouldBe` Just 'c'
 
   describe "splitLines" $ do
     -- The three checks named in the roadmap.
