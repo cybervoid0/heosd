@@ -1,10 +1,10 @@
 module Heos.Connection.Internal where
 
-import Control.Concurrent (MVar, newMVar, withMVar)
-import Control.Concurrent.Async (race)
+import Control.Concurrent (MVar, newMVar, threadDelay, withMVar)
+import Control.Concurrent.Async (concurrently, race)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, putTMVar, readTVar, stateTVar, takeTMVar, tryPutTMVar, writeTChan, writeTVar)
-import Control.Exception (IOException, bracket, bracket_, finally, throwIO, try)
-import Control.Monad (forM_, unless, when)
+import Control.Exception (Exception, IOException, bracket, bracket_, finally, throwIO, try)
+import Control.Monad (forM_, forever, unless, when)
 import Data.Aeson (eitherDecodeStrict)
 import Data.Bifunctor (Bifunctor (first))
 import Data.ByteString (ByteString)
@@ -15,7 +15,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
-import Heos.Command (Command, renderCommand)
+import GHC.Exception (displayException)
+import Heos.Command (Command (HeartBeat), renderCommand)
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), IncomingEnvelope (..), classifyEnvelope)
 import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
@@ -24,7 +25,16 @@ import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
 data ConnectionError = ConnectionLost | ConnectionTimeout deriving (Show, Eq)
+instance Exception ConnectionError where
+  displayException ConnectionLost = "the device closed the connection"
+  displayException ConnectionTimeout = "the device did not answer in time"
+
 type EitherEnvelope = Either ConnectionError Envelope
+
+newtype Seconds = Seconds Double deriving (Show, Eq)
+
+toMicros :: Seconds -> Int
+toMicros (Seconds s) = round (s * 1000000)
 
 -- | Split a chunk of the socket stream into complete lines and the unfinished
 --   tail. Lines are delimited by **\\r\\n**, which is dropped. The tail has no
@@ -39,6 +49,18 @@ splitLines bs
   (line, after) = BS.breakSubstring delimiter bs
   next = BS.drop (BS.length delimiter) after -- the stream after the delimiter
 
+-- TODO: перенести эти константы в конфиг
+data ConnectionParams = ConnectionParams
+  { commandTimeout :: Seconds
+  , heartbeatDelay :: Seconds
+  }
+connectionParams :: ConnectionParams
+connectionParams =
+  ConnectionParams
+    { commandTimeout = Seconds 5
+    , heartbeatDelay = Seconds 30
+    }
+
 -- | A live link to one HEOS device. Shared by every thread that talks to
 --   the device; the mutable parts are cells, the record itself never changes.
 data Connection = Connection
@@ -51,7 +73,7 @@ data Connection = Connection
   -- ^ the one SEQUENCE counter for this connection
   , sendLock :: MVar ()
   -- ^ one command in flight at a time; see 'sendCommand'
-  , commandTimeout :: Int
+  , params :: ConnectionParams
   }
 
 -- | Open a TCP connection to the device at the given address and run the
@@ -61,25 +83,24 @@ withConnection :: SockAddr -> (Connection -> IO a) -> IO a
 withConnection sockAddr act = bracket open close go
  where
   open = socket AF_INET Stream defaultProtocol
-  commandTimeout = 5000000
   go sock = do
     connect sock sockAddr
-    runConnection commandTimeout sock act
+    runConnection connectionParams sock act
 
 -- | Run the action over an already connected socket: start the reader
 --   thread, hand out the 'Connection', and kill the reader when the action
 --   is done. If the reader dies first (the device closed the connection),
 --   the action is cancelled and the reader's error propagates. Takes a
 --   socket rather than an address so tests can pass one end of a socket pair.
-runConnection :: Int -> Socket -> (Connection -> IO a) -> IO a
-runConnection commandTimeout sock act = do
+runConnection :: ConnectionParams -> Socket -> (Connection -> IO a) -> IO a
+runConnection params sock act = do
   events <- newBroadcastTChanIO
   waiting <- newTVarIO Map.empty
   nextSeq <- newTVarIO @Int 0
   sendLock <- newMVar ()
-  let conn = Connection{sock, events, waiting, nextSeq, sendLock, commandTimeout}
-  res <- race (reader conn) (act conn)
-  either absurd pure res
+  let conn = Connection{sock, events, waiting, nextSeq, sendLock, params}
+  res <- race (heartBeat conn `concurrently` reader conn) (act conn)
+  either (absurd . fst) pure res
 
 -- | The reader thread: the only one that reads the socket. Cuts the stream
 --   into lines, decodes each and routes it: events go to subscribers,
@@ -94,7 +115,7 @@ reader conn = go "" `finally` failAll
   go buffer = do
     chunk <- recv conn.sock 4096
     -- пустой `recv` — это конец потока; бросить исключение, а не продолжать
-    when (BS.null chunk) $ throwIO (userError "connection closed by device")
+    when (BS.null chunk) $ throwIO ConnectionLost
     let (complete, rest) = splitLines (buffer <> chunk)
     forM_ complete $ \bs -> do
       let eitherIncEnv = classifyEnvelope <$> eitherDecodeStrict bs
@@ -154,9 +175,11 @@ sendCommand conn cmd = withMVar conn.sendLock $ \_ -> do
   go seqNo box =
     try @IOException (sendAll conn.sock $ renderCommand seqNo cmd) >>= \case
       Left _ -> pure $ Left ConnectionLost
-      -- Это частично примененный fromMaybe у которого остался один аргумент
-      -- и его применяют через fmap к IO Maybe, возвращаемом таймаутом.
-      -- И всё это нужно чтобы не писать do и сократить одну строчку
-      -- И работает это только потому что fromMaybe - чистая функция,
-      -- иначе пришлось бы писать >>= (bind) или do
-      Right _ -> fromMaybe (Left ConnectionTimeout) <$> timeout conn.commandTimeout (atomically $ takeTMVar box)
+      Right _ -> fromMaybe (Left ConnectionTimeout) <$> timeout (toMicros conn.params.commandTimeout) (atomically $ takeTMVar box)
+
+heartBeat :: Connection -> IO Void
+heartBeat conn =
+  forever $
+    threadDelay (toMicros conn.params.heartbeatDelay) >> sendCommand conn HeartBeat >>= \case
+      Left err -> throwIO err
+      Right _ -> pure ()

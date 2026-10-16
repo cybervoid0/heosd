@@ -4,7 +4,7 @@ import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async (concurrently)
 import Control.Concurrent.STM (TChan, atomically, readTChan, readTVarIO)
 import Control.Exception (SomeException, bracket, try)
-import Control.Monad (forever)
+import Control.Monad (forever, replicateM_)
 import Data.ByteString (ByteString)
 import Data.Maybe (isNothing)
 import Data.ByteString qualified as BS
@@ -13,7 +13,7 @@ import Data.Text.Encoding qualified as T
 import Heos.Command (Command (..))
 import Heos.Player (PlayerId (..))
 import Data.Map.Strict qualified as Map
-import Heos.Connection.Internal (Connection (..), ConnectionError (..), findBox, runConnection, sendCommand, splitLines, subscribe)
+import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionParams (..), Seconds (..), findBox, runConnection, sendCommand, splitLines, subscribe)
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
 import Network.Socket (Family (AF_UNIX), Socket, SocketType (Stream), close, socketPair)
@@ -98,10 +98,14 @@ exchange conn theirs cmd check replies = do
       (recv theirs 4096 >>= check >> mapM_ (sendAll theirs) replies)
   pure reply
 
--- runConnection with a one-second command timeout: long enough for a fake
--- device that answers at once, short enough to fail a test rather than hang it.
+-- A one-second command timeout: long enough for a fake device that answers
+-- at once, short enough to fail a test rather than hang it. Heartbeats are
+-- an hour apart so they never interfere with the command under test.
+testParams :: ConnectionParams
+testParams = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600}
+
 run :: Socket -> (Connection -> IO a) -> IO a
-run = runConnection 1000000
+run = runConnection testParams
 
 -- The tests here expect the device to answer; a Left is a failure.
 unwrap :: Either ConnectionError Envelope -> IO Envelope
@@ -160,14 +164,16 @@ spec = do
           nextEvent ch1 `shouldReturn` volumeEvent "5"
           nextEvent ch2 `shouldReturn` volumeEvent "5"
 
-    -- The device closing the connection must end runConnection with an
-    -- error, not leave the action waiting forever (and not spin the reader).
-    it "fails, and stops the action, when the device closes the connection" $
+    -- The device closing the connection must end runConnection with
+    -- ConnectionLost, not leave the action waiting forever (and not spin the
+    -- reader). It is ConnectionLost, not a plain IOException, so that
+    -- withReconnect (stage 23) can tell a dropped link from any other error.
+    it "fails with ConnectionLost, and stops the action, when the device closes the connection" $
       withSocketPair $ \(ours, theirs) -> do
         let stuck = run ours $ \(_ :: Connection) -> do
               close theirs
               forever (threadDelay 100000)
-        timeout 2000000 stuck `shouldThrow` anyIOException
+        timeout 2000000 stuck `shouldThrow` (== ConnectionLost)
 
   describe "sendCommand" $ do
     it "sends the rendered command with its SEQUENCE and returns the reply" $
@@ -331,7 +337,7 @@ spec = do
   describe "when the device is silent" $ do
     it "gives up with Left ConnectionTimeout and leaves nothing in flight" $
       withSocketPair $ \(ours, _) ->
-        runConnection 100000 ours $ \conn -> do
+        runConnection testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
           outcome <- timeout 2000000 (sendCommand conn HeartBeat)
           outcome `shouldBe` Just (Left ConnectionTimeout)
           inFlight conn `shouldReturn` 0
@@ -340,13 +346,36 @@ spec = do
     -- any more, so it is dropped, and the next command gets its own reply.
     it "drops the late reply and serves the next command" $
       withSocketPair $ \(ours, theirs) ->
-        runConnection 100000 ours $ \conn -> do
+        runConnection testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
           _ <- sendCommand conn HeartBeat
           _ <- recv theirs 4096 -- the device finally reads the abandoned command...
           sendAll theirs heartBeatLine -- ...and answers it, too late
           threadDelay 50000
           answer <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
           answer.heos.command `shouldBe` "player/get_players"
+
+  -- Stage 22. Heartbeats every 50 ms here; the daemon sends one every 30 s.
+  describe "heartbeat" $ do
+    it "sends system/heart_beat at the configured interval and keeps going while answered" $
+      withSocketPair $ \(ours, theirs) -> do
+        let params = testParams{heartbeatDelay = Seconds 0.05}
+            -- the device: expect a heartbeat, answer it, three times
+            beat = do
+              sent <- recv theirs 4096
+              sent `shouldSatisfy` BS.isPrefixOf "heos://system/heart_beat"
+              sendAll theirs heartBeatLine
+        seen <- timeout 2000000 $ runConnection params ours $ \_ -> replicateM_ 3 beat
+        seen `shouldBe` Just ()
+
+    -- A heartbeat nobody answers is how the daemon learns the link is dead
+    -- without anyone sending a command: the connection must end with an
+    -- error, not idle on.
+    it "ends the connection when a heartbeat gets no reply" $
+      withSocketPair $ \(ours, _) -> do
+        let params = testParams{heartbeatDelay = Seconds 0.05, commandTimeout = Seconds 0.1}
+        outcome <- timeout 2000000 $ try @SomeException $ runConnection params ours $ \_ ->
+          forever (threadDelay 100000) :: IO ()
+        outcome `shouldSatisfy` \o -> case o of Just (Left _) -> True; _ -> False
 
   describe "findBox" $ do
     let boxes = Map.fromList [(7, 'a'), (8, 'b')]
