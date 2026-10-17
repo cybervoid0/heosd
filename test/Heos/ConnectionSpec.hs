@@ -13,7 +13,8 @@ import Data.Text.Encoding qualified as T
 import Heos.Command (Command (..))
 import Heos.Player (PlayerId (..))
 import Data.Map.Strict qualified as Map
-import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionParams (..), Seconds (..), findBox, runConnection, sendCommand, splitLines, subscribe)
+import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionParams (..), findBox, runConnection, sendCommand, splitLines, subscribe)
+import Heos.Time (Seconds (..))
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
 import Network.Socket (Family (AF_UNIX), Socket, SocketType (Stream), close, socketPair)

@@ -6,7 +6,7 @@ import Control.Concurrent.STM (atomically, newTVarIO, readTVarIO, stateTVar)
 import Control.Exception (ErrorCall (..), bracket, throwIO)
 import Control.Monad (forever)
 import Control.Retry (RetryPolicyM, constantDelay)
-import Heos.Connection.Internal (reconnecting)
+import Heos.Connection.Reconnect (reconnecting)
 import Heos.Discovery (DiscoveryError (..))
 import Network.Socket (
   Family (AF_INET),

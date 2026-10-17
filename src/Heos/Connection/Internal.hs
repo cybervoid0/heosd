@@ -5,8 +5,6 @@ import Control.Concurrent.Async (concurrently, race)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, putTMVar, readTVar, stateTVar, takeTMVar, tryPutTMVar, writeTChan, writeTVar)
 import Control.Exception (Exception, IOException, bracket, bracket_, finally, throwIO, try)
 import Control.Monad (forM_, forever, unless, when)
-import Control.Monad.Catch (Handler (..))
-import Control.Retry (RetryPolicyM, capDelay, exponentialBackoff, recovering)
 import Data.Aeson (eitherDecodeStrict)
 import Data.Bifunctor (Bifunctor (first))
 import Data.ByteString (ByteString)
@@ -17,11 +15,10 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
-import GHC.Base (NonEmpty ((:|)))
 import GHC.Exception (displayException)
 import Heos.Command (Command (HeartBeat), renderCommand)
-import Heos.Discovery (DiscoveryError, discover)
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), IncomingEnvelope (..), classifyEnvelope)
+import Heos.Time (Seconds (..), toMicros)
 import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
 import Network.Socket.ByteString (recv, sendAll)
@@ -34,11 +31,6 @@ instance Exception ConnectionError where
   displayException ConnectionTimeout = "the device did not answer in time"
 
 type EitherEnvelope = Either ConnectionError Envelope
-
-newtype Seconds = Seconds Double deriving (Show, Eq)
-
-toMicros :: Seconds -> Int
-toMicros (Seconds s) = round (s * 1000000)
 
 -- | Split a chunk of the socket stream into complete lines and the unfinished
 --   tail. Lines are delimited by **\\r\\n**, which is dropped. The tail has no
@@ -79,28 +71,6 @@ data Connection = Connection
   -- ^ one command in flight at a time; see 'sendCommand'
   , params :: ConnectionParams
   }
-
--- | Find the device and run the action over a connection to it. If the
---   search fails or the connection drops, wait and start over, search
---   included; the action runs again on every new connection. Returns when
---   the action returns.
-withReconnect :: (Connection -> IO a) -> IO a
-withReconnect = reconnecting policy findAddr
- where
-  policy = (capDelay . toMicros) (Seconds 60) $ (exponentialBackoff . toMicros) (Seconds 1)
-  findAddr =
-    discover >>= \case
-      Left err -> throwIO err
-      Right (addr :| _) -> pure addr
-
-reconnecting :: RetryPolicyM IO -> IO SockAddr -> (Connection -> IO a) -> IO a
-reconnecting policy findAddr act = recovering policy handlers $ \_ -> findAddr >>= (`withConnection` act)
- where
-  handlers =
-    [ const $ Handler $ \(e :: DiscoveryError) -> True <$ putStrLn ("reconnect: " <> displayException e)
-    , const $ Handler $ \(e :: ConnectionError) -> True <$ putStrLn ("reconnect: " <> displayException e)
-    , const $ Handler $ \(e :: IOException) -> True <$ putStrLn ("reconnect: " <> displayException e)
-    ]
 
 -- | Open a TCP connection to the device at the given address and run the
 --   action over it. The socket is closed when the action returns, throws

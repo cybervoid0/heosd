@@ -11,5 +11,7 @@ import Heos.Connection.Internal (
   sendCommand,
   splitLines,
   subscribe,
+ )
+import Heos.Connection.Reconnect (
   withReconnect,
  )

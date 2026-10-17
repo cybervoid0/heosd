@@ -86,6 +86,7 @@ library
                       Heos.Discovery.Internal
                       Heos.Connection
                       Heos.Connection.Internal
+                      Heos.Connection.Reconnect
                       Heos.Effect
                       Heos.Handler.Live
                       Heos.Handler.Fake
@@ -95,6 +96,7 @@ library
                       Heos.Command
                       Heos.ToParam
                       Heos.FirstTalk
+                      Heos.Time
 
     -- Modules included in this library but not exported.
     -- other-modules:
