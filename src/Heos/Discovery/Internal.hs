@@ -1,12 +1,11 @@
 module Heos.Discovery.Internal where
 
-import Control.Exception (IOException, bracket, try)
-import Control.Retry (RetryStatus, constantDelay, limitRetries, retrying)
+import Control.Exception (Exception, IOException, bracket, try)
 import Data.ByteString.Char8 qualified as BS
-import Data.Either (isLeft)
 import Data.List (partition)
 import Data.List.NonEmpty (NonEmpty (..), nonEmpty, nub)
 import Data.Maybe (mapMaybe)
+import GHC.Exception (displayException)
 import Network.Socket (
   Family (AF_INET),
   SockAddr (SockAddrInet),
@@ -29,17 +28,13 @@ data DiscoveryError
     -- router, TV, Chromecast); the addresses are useful in the log
     NoHeosDevice (NonEmpty SockAddr)
   deriving (Show, Eq)
+instance Exception DiscoveryError where
+  displayException (SocketFailure e) = "Socket failure: " <> show e
+  displayException NoResponse = "No response"
+  displayException (NoHeosDevice addr) = "Found non-Heos device: " <> show addr
 
 type DiscoveryResult = Either DiscoveryError (NonEmpty SockAddr)
 type Datagram = (BS.ByteString, SockAddr)
-
--- | Finds HEOS devices in the local network
-discover :: IO (Either DiscoveryError (NonEmpty SockAddr))
-discover = retrying policy shouldRetry discoverOnce
- where
-  policy = constantDelay 500000 <> limitRetries 2 -- 0.5 s pause, up to 2 retries (3 attempts)
-  -- retry only on Left, i.e. when there is an error
-  shouldRetry _ = pure . isLeft
 
 -- | SSDP multicast group and port
 multicastAddr :: SockAddr
@@ -68,8 +63,9 @@ mSearchData =
  where
   bsShow val = BS.pack (show val)
 
-discoverOnce :: RetryStatus -> IO DiscoveryResult
-discoverOnce _ =
+-- | Finds HEOS devices in the local network
+discover :: IO (Either DiscoveryError (NonEmpty SockAddr))
+discover =
   either (Left . SocketFailure) filterDatagrams
     <$> try @IOException (bracket open close handleSocket)
  where

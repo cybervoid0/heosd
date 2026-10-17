@@ -115,6 +115,7 @@ library
                   , effectful
                   , retry
                   , containers
+                  , exceptions
                   
         
     -- Directories containing source files.
@@ -161,6 +162,7 @@ test-suite heosd-test
                       Heos.CommandSpec
                       Heos.DiscoverySpec
                       Heos.ConnectionSpec
+                      Heos.ReconnectSpec
 
     build-tool-depends: hspec-discover:hspec-discover
 
@@ -171,6 +173,7 @@ test-suite heosd-test
                     , network
                     , stm
                     , async
+                    , retry
                     , hspec
                     , QuickCheck
                     , directory

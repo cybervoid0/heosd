@@ -1,6 +1,6 @@
 module Heos.Connection (
   splitLines,
-  withConnection,
+  withReconnect,
   Connection,
   subscribe,
   sendCommand,
@@ -11,5 +11,5 @@ import Heos.Connection.Internal (
   sendCommand,
   splitLines,
   subscribe,
-  withConnection,
+  withReconnect,
  )
