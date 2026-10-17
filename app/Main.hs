@@ -1,6 +1,10 @@
 module Main (main) where
 
-{- CLI arguments, config, startup, signal handling -}
+import Heos.FirstTalk (firstTalk)
+
+import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 
 main :: IO ()
-main = pure ()
+main = do
+  hSetBuffering stdout LineBuffering
+  firstTalk

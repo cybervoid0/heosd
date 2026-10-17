@@ -97,9 +97,9 @@ reconnecting :: RetryPolicyM IO -> IO SockAddr -> (Connection -> IO a) -> IO a
 reconnecting policy findAddr act = recovering policy handlers $ \_ -> findAddr >>= (`withConnection` act)
  where
   handlers =
-    [ const $ Handler $ \(_ :: DiscoveryError) -> pure True
-    , const $ Handler $ \(_ :: ConnectionError) -> pure True
-    , const $ Handler $ \(_ :: IOException) -> pure True
+    [ const $ Handler $ \(e :: DiscoveryError) -> True <$ putStrLn ("reconnect: " <> displayException e)
+    , const $ Handler $ \(e :: ConnectionError) -> True <$ putStrLn ("reconnect: " <> displayException e)
+    , const $ Handler $ \(e :: IOException) -> True <$ putStrLn ("reconnect: " <> displayException e)
     ]
 
 -- | Open a TCP connection to the device at the given address and run the
