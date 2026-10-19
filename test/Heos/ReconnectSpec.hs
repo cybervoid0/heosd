@@ -1,7 +1,7 @@
 module Heos.ReconnectSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
-import Control.Concurrent.Async (async, race_, wait)
+import Control.Concurrent.Async (async, concurrently_, race_, wait)
 import Control.Concurrent.STM (atomically, newTVarIO, readTVarIO, stateTVar)
 import Control.Exception (ErrorCall (..), bracket, throwIO)
 import Control.Monad (forever)
@@ -48,10 +48,22 @@ withDevice k = bracket (socket AF_INET Stream defaultProtocol) close $ \srv -> d
   addr <- getSocketName srv
   k addr srv
 
--- Accept one connection and answer every command on it (the start-up
--- sequence included) until the daemon hangs up.
-serveOne :: Socket -> IO ()
-serveOne srv = bracket (fst <$> accept srv) close $ \c -> newTVarIO [] >>= (`answering` c)
+-- The daemon opens two sockets per connection. Accept both and hand them
+-- to the continuation; both are closed when it returns.
+withBoth :: Socket -> (Socket -> Socket -> IO a) -> IO a
+withBoth srv k =
+  bracket (fst <$> accept srv) close $ \a ->
+    bracket (fst <$> accept srv) close $ \b -> k a b
+
+-- Answer every command on both sockets (the start-up sequence included)
+-- until the daemon hangs up.
+answerBoth :: Socket -> Socket -> IO ()
+answerBoth a b = answering ignore a `concurrently_` answering ignore b
+ where
+  ignore _ = pure ()
+
+serve :: Socket -> IO ()
+serve srv = withBoth srv answerBoth
 
 -- Nobody listens on port 1: connect is refused at once, no waiting.
 deadAddr :: SockAddr
@@ -89,7 +101,7 @@ spec = describe "reconnecting" $ do
     withDevice $ \addr srv -> do
       (findAddr, asked) <- scripted [Right addr]
       (start, runs) <- counting
-      device <- async (serveOne srv)
+      device <- async (serve srv)
       result <- bounded $ reconnecting quick findAddr (\_ -> ("run " <>) . show <$> start)
       result `shouldBe` "run 1"
       runs >>= (`shouldBe` 1)
@@ -104,11 +116,9 @@ spec = describe "reconnecting" $ do
       (start, _) <- counting
       started <- newEmptyMVar
       device <- async $ do
-        -- answer until the action is under way, then pull the plug
-        bracket (fst <$> accept srv) close $ \first -> do
-          seen <- newTVarIO []
-          race_ (answering seen first) (takeMVar started)
-        serveOne srv
+        -- answer until the action is under way, then pull the plug on both
+        withBoth srv $ \a b -> race_ (answerBoth a b) (takeMVar started)
+        serve srv
       result <- bounded $ reconnecting quick (pure addr) $ \_ -> do
         n <- start
         if n == 1
@@ -124,7 +134,7 @@ spec = describe "reconnecting" $ do
     withDevice $ \addr srv -> do
       (findAddr, asked) <- scripted [Right deadAddr, Right deadAddr, Right addr]
       (start, runs) <- counting
-      device <- async (serveOne srv)
+      device <- async (serve srv)
       result <- bounded $ reconnecting quick findAddr (const start)
       result `shouldBe` 1
       runs >>= (`shouldBe` 1)
@@ -137,7 +147,7 @@ spec = describe "reconnecting" $ do
     withDevice $ \addr srv -> do
       (findAddr, asked) <- scripted [Left NoResponse, Left NoResponse, Right addr]
       (start, runs) <- counting
-      device <- async (serveOne srv)
+      device <- async (serve srv)
       result <- bounded $ reconnecting quick findAddr (const start)
       result `shouldBe` 1
       runs >>= (`shouldBe` 1)
@@ -148,7 +158,7 @@ spec = describe "reconnecting" $ do
   -- action is not a reason to reconnect; it surfaces.
   it "lets an exception that isn't about the device through" $
     withDevice $ \addr srv -> do
-      device <- async (serveOne srv)
+      device <- async (serve srv)
       bounded (reconnecting quick (pure addr) (\_ -> throwIO (ErrorCall "bug in the action")))
         `shouldThrow` (\(ErrorCall msg) -> msg == "bug in the action")
       wait device

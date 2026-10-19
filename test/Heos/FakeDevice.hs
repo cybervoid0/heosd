@@ -4,7 +4,6 @@
 --   right box and the connection code can't tell it from a real one.
 module Heos.FakeDevice (answering, commandPath, commandQuery) where
 
-import Control.Concurrent.STM (TVar, atomically, modifyTVar')
 import Control.Monad (forM_, unless)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -15,17 +14,16 @@ import Network.Socket (Socket)
 import Network.Socket.ByteString (recv, sendAll)
 
 -- | Read commands and answer each one until the other side hangs up. Every
---   command line seen is prepended to the list, so the list reads newest
---   first; reverse it to get the order they were sent.
-answering :: TVar [ByteString] -> Socket -> IO ()
-answering seen sock = go ""
+--   command line is handed to the callback first, so a test can log it.
+answering :: (ByteString -> IO ()) -> Socket -> IO ()
+answering record sock = go ""
  where
   go buffer = do
     chunk <- recv sock 4096
     unless (BS.null chunk) $ do
       let (complete, rest) = splitLines (buffer <> chunk)
       forM_ complete $ \line -> do
-        atomically $ modifyTVar' seen (line :)
+        record line
         sendAll sock (replyTo line)
       go rest
 

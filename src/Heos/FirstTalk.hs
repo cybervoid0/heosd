@@ -6,8 +6,8 @@ import Control.Monad (forever)
 import Data.Text qualified as T
 import Data.Void (Void)
 import Heos.Command (Command (..))
-import Heos.Connection (sendCommand, subscribe, withReconnect)
-import Heos.Connection.Internal (Connection (..), ConnectionParams (..))
+import Heos.Connection (Connection, sendCommand, subscribe, withReconnect)
+import Heos.Connection.Parameters (ConnectionParams (..), defaultParams)
 import Heos.Envelope (HeosEvent (..))
 import Heos.Player (PlayState (Pause, Play), PlayerId)
 import Heos.Url (lookupParam)
@@ -43,7 +43,7 @@ remote conn volumeRef = do
       putStrLn (maybe "Volume: unknown" (("Volume: " <>) . show) volume)
       remote conn volumeRef
     _ -> do
-      case keyToCommand line conn.params.playerId of
+      case keyToCommand line defaultParams.playerId of
         Just cmd -> sendCommand conn cmd >>= print
         Nothing -> putStrLn "команды: + - > || >> << q v"
       remote conn volumeRef
