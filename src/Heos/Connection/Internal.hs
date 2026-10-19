@@ -3,7 +3,7 @@ module Heos.Connection.Internal where
 import Control.Concurrent (MVar, newMVar, threadDelay, withMVar)
 import Control.Concurrent.Async (concurrently, race)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, putTMVar, readTVar, stateTVar, takeTMVar, tryPutTMVar, writeTChan, writeTVar)
-import Control.Exception (Exception, IOException, bracket, bracket_, finally, throwIO, try)
+import Control.Exception (Exception, IOException, bracket, bracket_, finally, handle, throwIO, try)
 import Control.Monad (forM_, forever, unless, when)
 import Data.Aeson (eitherDecodeStrict)
 import Data.Bifunctor (Bifunctor (first))
@@ -11,13 +11,13 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
 import GHC.Exception (displayException)
-import Heos.Command (Command (HeartBeat), renderCommand)
+import Heos.Command (Command (GetGroups, GetMusicSources, GetNowPlayingMedia, GetPlayState, GetPlayers, GetVolume, HeartBeat, RegisterForChangeEvents), renderCommand)
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), IncomingEnvelope (..), classifyEnvelope)
+import Heos.Player (OnOff (Off, On), PlayerId (PlayerId))
 import Heos.Time (Seconds (..), toMicros)
 import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
@@ -49,12 +49,14 @@ splitLines bs
 data ConnectionParams = ConnectionParams
   { commandTimeout :: Seconds
   , heartbeatDelay :: Seconds
+  , playerId :: PlayerId
   }
 connectionParams :: ConnectionParams
 connectionParams =
   ConnectionParams
     { commandTimeout = Seconds 5
     , heartbeatDelay = Seconds 30
+    , playerId = PlayerId (-1245882071)
     }
 
 -- | A live link to one HEOS device. Shared by every thread that talks to
@@ -72,6 +74,23 @@ data Connection = Connection
   , params :: ConnectionParams
   }
 
+initialize :: Connection -> IO ()
+initialize conn = do
+  _ <- sendCommand' conn (RegisterForChangeEvents Off)
+  -- TODO: поставить сюда signIn
+  -- signinEnv <- sendCommand' conn (AccountSignIn ...)
+  -- TODO этап 30: тут нужно проверить, есть ли плееры, иначе и говорить дальше не о чем. Пустой список бросает ConnectionError. И если нет своего PlayerID — то тоже.
+  playersEnv <- sendCommand' conn GetPlayers
+  groupsEnv <- sendCommand' conn GetGroups
+  musicSourcesEnv <- sendCommand' conn GetMusicSources
+  playingMediaEnv <- sendCommand' conn (GetNowPlayingMedia conn.params.playerId)
+  volumeEnv <- sendCommand' conn (GetVolume conn.params.playerId)
+  playStateEnv <- sendCommand' conn (GetPlayState conn.params.playerId)
+  _ <- sendCommand' conn (RegisterForChangeEvents On)
+
+  let queryResults = [playersEnv, groupsEnv, musicSourcesEnv, playingMediaEnv, volumeEnv, playStateEnv]
+  forM_ queryResults print
+
 -- | Open a TCP connection to the device at the given address and run the
 --   action over it. The socket is closed when the action returns, throws
 --   or is cancelled. Everything but the socket is 'runConnection'.
@@ -81,7 +100,7 @@ withConnection sockAddr act = bracket open close go
   open = socket AF_INET Stream defaultProtocol
   go sock = do
     connect sock sockAddr
-    runConnection connectionParams sock act
+    runConnection connectionParams sock $ \conn -> initialize conn >> act conn
 
 -- | Run the action over an already connected socket: start the reader
 --   thread, hand out the 'Connection', and kill the reader when the action
@@ -152,14 +171,9 @@ findBox mbSeqTxt boxes = case seqNo of
 subscribe :: Connection -> IO (TChan HeosEvent)
 subscribe conn = atomically $ dupTChan conn.events
 
--- | Send a command and wait for its reply. Takes 'sendLock' for the whole
---   exchange, so commands go one at a time: replies without SEQUENCE
---   (get_players, heart_beat) can then only mean the one in flight. The box
---   is registered under the SEQUENCE number before sending, otherwise a
---   fast reply could arrive before anyone waits for it, and removed by the
---   bracket however the wait ends: reply, timeout or cancellation.
-sendCommand :: Connection -> Command -> IO EitherEnvelope
-sendCommand conn cmd = withMVar conn.sendLock $ \_ -> do
+-- | Throwing version of sendCommand
+sendCommand' :: Connection -> Command -> IO Envelope
+sendCommand' conn cmd = withMVar conn.sendLock $ \_ -> do
   seqNo <- atomically $ stateTVar conn.nextSeq (\n -> (n, n + 1))
   box <- newEmptyTMVarIO
   bracket_ (open seqNo box) (closeBox seqNo) (go seqNo box)
@@ -168,14 +182,24 @@ sendCommand conn cmd = withMVar conn.sendLock $ \_ -> do
   open seqNo box = atomically $ modifyTVar' conn.waiting (Map.insert seqNo box)
   -- в завершении или при обрыве соединения - удалить ячейку
   closeBox seqNo = atomically $ modifyTVar' conn.waiting (Map.delete seqNo)
-  go seqNo box =
-    try @IOException (sendAll conn.sock $ renderCommand seqNo cmd) >>= \case
-      Left _ -> pure $ Left ConnectionLost
-      Right _ -> fromMaybe (Left ConnectionTimeout) <$> timeout (toMicros conn.params.commandTimeout) (atomically $ takeTMVar box)
+  go seqNo box = do
+    -- заменить IOException на ConnectionLost при отправке байтов в сокет
+    handle (\(_ :: IOException) -> throwIO ConnectionLost) $
+      sendAll conn.sock (renderCommand seqNo cmd)
+    -- кто-то снаружи уже положил ответ на эту команду в ячейку, нужно её достать
+    -- и вернуть, а в случае если не уложились в таймаут - бросить исключение
+    timeout (toMicros conn.params.commandTimeout) (atomically $ takeTMVar box) >>= maybe (throwIO ConnectionTimeout) (either throwIO pure)
+
+-- | Send a command and wait for its reply. Takes 'sendLock' for the whole
+--   exchange, so commands go one at a time: replies without SEQUENCE
+--   (get_players, heart_beat) can then only mean the one in flight. The box
+--   is registered under the SEQUENCE number before sending, otherwise a
+--   fast reply could arrive before anyone waits for it, and removed by the
+--   bracket however the wait ends: reply, timeout or cancellation.
+sendCommand :: Connection -> Command -> IO EitherEnvelope
+sendCommand conn cmd = try @ConnectionError $ sendCommand' conn cmd
 
 heartBeat :: Connection -> IO Void
 heartBeat conn =
   forever $
-    threadDelay (toMicros conn.params.heartbeatDelay) >> sendCommand conn HeartBeat >>= \case
-      Left err -> throwIO err
-      Right _ -> pure ()
+    threadDelay (toMicros conn.params.heartbeatDelay) >> sendCommand' conn HeartBeat

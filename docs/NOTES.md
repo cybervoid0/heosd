@@ -29,6 +29,12 @@
 | `player/volume_up` | `pid=…&step=1&SEQUENCE=0` | `pid=…&step=1&SEQUENCE=0` |
 | `player/volume_down` | `pid=…&step=1&SEQUENCE=0` | `pid=…&step=1&SEQUENCE=0` |
 | `player/set_play_state` | `pid=…&state=play&SEQUENCE=0` | `pid=…&state=play&SEQUENCE=0` |
+| `player/get_now_playing_media` | `pid=…&SEQUENCE=5` | `pid=…&SEQUENCE=5` |
+| `player/get_volume` | `pid=…&SEQUENCE=6` | `pid=…&level=15` — своё сообщение, номер потерян |
+| `player/get_play_state` | `pid=…&SEQUENCE=7` | `pid=…&state=play` — то же |
+| `system/sign_in` (отказ) | `un=…&pw=…&SEQUENCE=1` | `eid=10&text=User not found` — то же |
+
+Точнее так: `SEQUENCE` приходит, когда аппарат возвращает запрос эхом. Когда он составляет сообщение сам (`level=`, `state=`, `eid=`), номер пропадает, даже если у команды были аргументы.
 
 **Вывод:** сопоставлять ответ с запросом только по `SEQUENCE` нельзя. Основной путь — одна команда в полёте на соединении команд и сверка по полю `command`; `SEQUENCE` — дополнительная проверка там, где он есть.
 
@@ -39,6 +45,13 @@
 - **Прогресс шумит.** Пока играет музыка, `event/player_now_playing_progress` (`cur_pos`, `duration` в мс) приходит каждые 5 с. В логах — только на уровне debug.
 - **Ошибки воспроизведения.** Изредка приходит `event/player_playback_error` с текстом вроде `Could not decode the audio stream` (спецификация, раздел 5): аппарат не смог проиграть трек или поток, обычно сбой на стороне радио или стримингового сервиса. К демону отношения не имеет; в логе уровень warning, в состоянии аппарата (часть 5) хранить как последнюю ошибку для агента.
 - Во всех наблюдениях ответ на команду приходил раньше вызванных ею событий. Гарантии в спецификации нет — не полагаться.
+
+### Запуск (этап 24)
+
+- `system/sign_in` с адресом, под которым на аппарате залогинен Tidal, отвечает `fail eid=10 text=User not found`: аккаунт HEOS (учётка Denon) и вход в сервис на аппарате — разные вещи, и аккаунта HEOS может не быть вовсе. Для Tidal он не нужен: `get_music_sources` показывает `available=true` и `service_username`. Вход делать только если логин есть в конфиге (этап 33).
+- Номера источников на MODEL 60n: TuneIn 3, Deezer 5, SoundCloud 9, Tidal 10, Amazon 13, Qobuz 30, Local Music 1024, Playlists 1025, History 1026, AUX Input 1027, Favorites 1028. У каждого флаг `available`. В спецификации 2021 года Qobuz нет — номера брать из этого ответа, не зашивать (этап 30).
+- `get_now_playing_media` для станции Tidal: `type=station`, `sid=10`, `song`/`album`/`artist`/`station`, `image_url`, `qid`, `mid`, `album_id`; в конверте `options = Just []`.
+- `get_play_state` может ответить `state=play`, когда звука нет (зависший поток, см. `player_playback_error`). Состояние плеера — намерение, а не факт звука. После `play_next` поток пошёл.
 
 ### Поток и строки
 

@@ -1,13 +1,14 @@
 module Heos.ReconnectSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
-import Control.Concurrent.Async (async, wait)
+import Control.Concurrent.Async (async, race_, wait)
 import Control.Concurrent.STM (atomically, newTVarIO, readTVarIO, stateTVar)
 import Control.Exception (ErrorCall (..), bracket, throwIO)
 import Control.Monad (forever)
 import Control.Retry (RetryPolicyM, constantDelay)
 import Heos.Connection.Reconnect (reconnecting)
 import Heos.Discovery (DiscoveryError (..))
+import Heos.FakeDevice (answering)
 import Network.Socket (
   Family (AF_INET),
   HostAddress,
@@ -38,7 +39,7 @@ loopback :: HostAddress
 loopback = tupleToHostAddress (127, 0, 0, 1)
 
 -- A listening socket on a port picked by the OS. Plays the receiver: the
--- test accepts connections on it, closes them, accepts again.
+-- test accepts connections on it, answers, closes them, accepts again.
 withDevice :: (SockAddr -> Socket -> IO a) -> IO a
 withDevice k = bracket (socket AF_INET Stream defaultProtocol) close $ \srv -> do
   setSocketOption srv ReuseAddr 1
@@ -46,6 +47,11 @@ withDevice k = bracket (socket AF_INET Stream defaultProtocol) close $ \srv -> d
   listen srv 5
   addr <- getSocketName srv
   k addr srv
+
+-- Accept one connection and answer every command on it (the start-up
+-- sequence included) until the daemon hangs up.
+serveOne :: Socket -> IO ()
+serveOne srv = bracket (fst <$> accept srv) close $ \c -> newTVarIO [] >>= (`answering` c)
 
 -- Nobody listens on port 1: connect is refused at once, no waiting.
 deadAddr :: SockAddr
@@ -83,12 +89,12 @@ spec = describe "reconnecting" $ do
     withDevice $ \addr srv -> do
       (findAddr, asked) <- scripted [Right addr]
       (start, runs) <- counting
-      device <- async (fst <$> accept srv)
+      device <- async (serveOne srv)
       result <- bounded $ reconnecting quick findAddr (\_ -> ("run " <>) . show <$> start)
       result `shouldBe` "run 1"
       runs >>= (`shouldBe` 1)
       asked >>= (`shouldBe` 1)
-      wait device >>= close
+      wait device
 
   -- The device reboots: it closes the socket, the reader sees an empty recv,
   -- the action is cancelled, and the whole attempt starts over on a new
@@ -98,17 +104,18 @@ spec = describe "reconnecting" $ do
       (start, _) <- counting
       started <- newEmptyMVar
       device <- async $ do
-        (first, _) <- accept srv
-        takeMVar started -- let the action get going before pulling the plug
-        close first
-        fst <$> accept srv
+        -- answer until the action is under way, then pull the plug
+        bracket (fst <$> accept srv) close $ \first -> do
+          seen <- newTVarIO []
+          race_ (answering seen first) (takeMVar started)
+        serveOne srv
       result <- bounded $ reconnecting quick (pure addr) $ \_ -> do
         n <- start
         if n == 1
           then putMVar started () >> forever (threadDelay 1000000)
           else pure n
       result `shouldBe` 2
-      wait device >>= close
+      wait device
 
   -- The device is off, or the address is stale after a DHCP change: connect
   -- is refused. The next attempt asks for the address again rather than
@@ -117,12 +124,12 @@ spec = describe "reconnecting" $ do
     withDevice $ \addr srv -> do
       (findAddr, asked) <- scripted [Right deadAddr, Right deadAddr, Right addr]
       (start, runs) <- counting
-      device <- async (fst <$> accept srv)
+      device <- async (serveOne srv)
       result <- bounded $ reconnecting quick findAddr (const start)
       result `shouldBe` 1
       runs >>= (`shouldBe` 1)
       asked >>= (`shouldBe` 3)
-      wait device >>= close
+      wait device
 
   -- SSDP found nothing: a failed search is as good a reason to wait and
   -- retry as a dropped connection.
@@ -130,18 +137,18 @@ spec = describe "reconnecting" $ do
     withDevice $ \addr srv -> do
       (findAddr, asked) <- scripted [Left NoResponse, Left NoResponse, Right addr]
       (start, runs) <- counting
-      device <- async (fst <$> accept srv)
+      device <- async (serveOne srv)
       result <- bounded $ reconnecting quick findAddr (const start)
       result `shouldBe` 1
       runs >>= (`shouldBe` 1)
       asked >>= (`shouldBe` 3)
-      wait device >>= close
+      wait device
 
   -- Only the three "device is away" exceptions are retried. A bug in the
   -- action is not a reason to reconnect; it surfaces.
   it "lets an exception that isn't about the device through" $
     withDevice $ \addr srv -> do
-      device <- async (fst <$> accept srv)
+      device <- async (serveOne srv)
       bounded (reconnecting quick (pure addr) (\_ -> throwIO (ErrorCall "bug in the action")))
         `shouldThrow` (\(ErrorCall msg) -> msg == "bug in the action")
-      wait device >>= close
+      wait device

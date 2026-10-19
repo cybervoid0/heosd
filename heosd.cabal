@@ -165,6 +165,7 @@ test-suite heosd-test
                       Heos.DiscoverySpec
                       Heos.ConnectionSpec
                       Heos.ReconnectSpec
+                      Heos.FakeDevice
 
     build-tool-depends: hspec-discover:hspec-discover
 

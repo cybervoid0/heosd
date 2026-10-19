@@ -1,8 +1,8 @@
 module Heos.ConnectionSpec (spec) where
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay)
-import Control.Concurrent.Async (concurrently)
-import Control.Concurrent.STM (TChan, atomically, readTChan, readTVarIO)
+import Control.Concurrent.Async (concurrently, withAsync)
+import Control.Concurrent.STM (TChan, atomically, newTVarIO, readTChan, readTVarIO)
 import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forever, replicateM_)
 import Data.ByteString (ByteString)
@@ -13,7 +13,8 @@ import Data.Text.Encoding qualified as T
 import Heos.Command (Command (..))
 import Heos.Player (PlayerId (..))
 import Data.Map.Strict qualified as Map
-import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionParams (..), findBox, runConnection, sendCommand, splitLines, subscribe)
+import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionParams (..), findBox, initialize, runConnection, sendCommand, splitLines, subscribe)
+import Heos.FakeDevice (answering, commandPath, commandQuery)
 import Heos.Time (Seconds (..))
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
@@ -103,7 +104,7 @@ exchange conn theirs cmd check replies = do
 -- at once, short enough to fail a test rather than hang it. Heartbeats are
 -- an hour apart so they never interfere with the command under test.
 testParams :: ConnectionParams
-testParams = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600}
+testParams = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1}
 
 run :: Socket -> (Connection -> IO a) -> IO a
 run = runConnection testParams
@@ -377,6 +378,45 @@ spec = do
         outcome <- timeout 2000000 $ try @SomeException $ runConnection params ours $ \_ ->
           forever (threadDelay 100000) :: IO ()
         outcome `shouldSatisfy` \o -> case o of Just (Left _) -> True; _ -> False
+
+  describe "initialize" $ do
+    -- The order the vendor prescribes: events off first, so the state
+    -- queries aren't interleaved with notifications; events on last.
+    it "runs the start-up sequence in the prescribed order" $
+      withSocketPair $ \(ours, theirs) -> do
+        seen <- newTVarIO []
+        withAsync (answering seen theirs) $ \_ ->
+          run ours initialize
+        commands <- reverse <$> readTVarIO seen
+        map commandPath commands
+          `shouldBe` [ "system/register_for_change_events"
+                     , "player/get_players"
+                     , "group/get_groups"
+                     , "browse/get_music_sources"
+                     , "player/get_now_playing_media"
+                     , "player/get_volume"
+                     , "player/get_play_state"
+                     , "system/register_for_change_events"
+                     ]
+        let enables = [BC.takeWhile (/= '&') q | q <- map commandQuery commands, "enable=" `BS.isPrefixOf` q]
+        enables `shouldBe` ["enable=off", "enable=on"]
+
+    -- The player queries go to the configured player, not to a hard-coded one.
+    it "asks about the player from the parameters" $
+      withSocketPair $ \(ours, theirs) -> do
+        seen <- newTVarIO []
+        withAsync (answering seen theirs) $ \_ ->
+          runConnection testParams{playerId = PlayerId 42} ours initialize
+        commands <- readTVarIO seen
+        filter (BS.isPrefixOf "pid=42" . commandQuery) commands `shouldSatisfy` ((== 3) . length)
+
+    -- A start-up command that gets no reply means the connection is no good:
+    -- initialize throws rather than carrying on with half a state, and the
+    -- reconnect loop takes it from there.
+    it "ends with ConnectionTimeout when the device doesn't answer" $
+      withSocketPair $ \(ours, _) ->
+        runConnection testParams{commandTimeout = Seconds 0.1} ours initialize
+          `shouldThrow` (== ConnectionTimeout)
 
   describe "findBox" $ do
     let boxes = Map.fromList [(7, 'a'), (8, 'b')]
