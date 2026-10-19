@@ -3,7 +3,7 @@ module Heos.Connection.Reconnect where
 import Control.Exception (Exception (displayException), IOException, throwIO)
 import Control.Monad.Catch (Handler (..))
 import Control.Retry (RetryPolicyM, capDelay, exponentialBackoff, recovering)
-import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.List.NonEmpty qualified as NE
 import Heos.Connection.Internal (Connection, ConnectionError, withConnection)
 import Heos.Discovery (DiscoveryError, discover)
 import Heos.Time (Seconds (..), toMicros)
@@ -17,10 +17,7 @@ withReconnect :: (Connection -> IO a) -> IO a
 withReconnect = reconnecting policy findAddr
  where
   policy = (capDelay . toMicros) (Seconds 60) $ (exponentialBackoff . toMicros) (Seconds 1)
-  findAddr =
-    discover >>= \case
-      Left err -> throwIO err
-      Right (addr :| _) -> pure addr
+  findAddr = discover >>= either throwIO (pure . NE.head)
 
 reconnecting :: RetryPolicyM IO -> IO SockAddr -> (Connection -> IO a) -> IO a
 reconnecting policy findAddr act = recovering policy handlers $ \_ -> findAddr >>= (`withConnection` act)
