@@ -69,6 +69,7 @@ common defaults
                         LambdaCase
                         OverloadedRecordDot
                         DuplicateRecordFields
+                        StrictData
     build-depends:      base ^>=4.21.0.0
 
 library

@@ -32,7 +32,7 @@ splitLines bs
 --   'lineEnd', newest first, none of them containing it, and their total
 --   length. A list rather than one ByteString, so a long line is copied
 --   once when it completes, not on every chunk.
-data Pending = Pending {chunks :: [ByteString], size :: !Int} deriving (Show, Eq)
+data Pending = Pending {chunks :: [ByteString], size :: Int} deriving (Show, Eq)
 
 emptyPending :: Pending
 emptyPending = Pending [] 0

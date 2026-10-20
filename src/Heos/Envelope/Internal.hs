@@ -40,9 +40,7 @@ instance FromJSON Envelope
 
 data HeosOutcome = Succeeded | Failed HeosError deriving (Show, Eq)
 
--- | Strict fields: an event waits in every subscriber's channel, and lazy
---   fields would keep the whole 'Envelope' it came from alive until read.
-data HeosEvent = HeosEvent {name :: !Text, params :: ![UrlParam]} deriving (Show, Eq)
+data HeosEvent = HeosEvent {name :: Text, params :: [UrlParam]} deriving (Show, Eq)
 
 data IncomingEnvelope
   = IncomingEvent HeosEvent Envelope
