@@ -6,10 +6,10 @@ module Heos.Connection (
   sendCommand,
 ) where
 
+import Heos.Connection.Framing (splitLines)
 import Heos.Connection.Internal (
   Connection,
   sendCommand,
-  splitLines,
   subscribe,
  )
 import Heos.Connection.Reconnect (

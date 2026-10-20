@@ -13,6 +13,9 @@ data ConnectionParams = ConnectionParams
   -- ^ pause between heartbeats on each socket
   , playerId :: PlayerId
   -- ^ the player the daemon controls
+  , maxLineLength :: Int
+  -- ^ how many bytes the device may send without a "\r\n" before the link
+  --   counts as broken; keeps the reader's buffer bounded
   }
 
 defaultParams :: ConnectionParams
@@ -21,4 +24,5 @@ defaultParams =
     { commandTimeout = Seconds 5
     , heartbeatDelay = Seconds 30
     , playerId = PlayerId (-1245882071)
+    , maxLineLength = 1024 * 1024
     }

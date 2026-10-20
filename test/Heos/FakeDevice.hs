@@ -9,23 +9,23 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Maybe (fromMaybe)
-import Heos.Connection (splitLines)
+import Heos.Connection.Framing (emptyPending, feedChunk)
 import Network.Socket (Socket)
 import Network.Socket.ByteString (recv, sendAll)
 
 -- | Read commands and answer each one until the other side hangs up. Every
 --   command line is handed to the callback first, so a test can log it.
 answering :: (ByteString -> IO ()) -> Socket -> IO ()
-answering record sock = go ""
+answering record sock = go emptyPending
  where
-  go buffer = do
+  go pending = do
     chunk <- recv sock 4096
     unless (BS.null chunk) $ do
-      let (complete, rest) = splitLines (buffer <> chunk)
+      let (complete, pending') = feedChunk pending chunk
       forM_ complete $ \line -> do
         record line
         sendAll sock (replyTo line)
-      go rest
+      go pending'
 
 replyTo :: ByteString -> ByteString
 replyTo line =

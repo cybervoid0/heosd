@@ -2,7 +2,7 @@ module Heos.ReconnectSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async (async, concurrently_, race_, wait)
-import Control.Concurrent.STM (atomically, newTVarIO, readTVarIO, stateTVar)
+import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVar, readTVarIO)
 import Control.Exception (ErrorCall (..), bracket, throwIO)
 import Control.Monad (forever)
 import Control.Retry (RetryPolicyM, constantDelay)
@@ -84,7 +84,7 @@ scripted :: [Either DiscoveryError SockAddr] -> IO (IO SockAddr, IO Int)
 scripted script = do
   calls <- newTVarIO (0 :: Int)
   let next = do
-        n <- atomically $ stateTVar calls (\n -> (n, n + 1))
+        n <- atomically $ readTVar calls <* modifyTVar' calls (+ 1)
         either throwIO pure (script !! min n (length script - 1))
   pure (next, readTVarIO calls)
 
@@ -93,7 +93,7 @@ scripted script = do
 counting :: IO (IO Int, IO Int)
 counting = do
   runs <- newTVarIO (0 :: Int)
-  pure (atomically $ stateTVar runs (\n -> (n + 1, n + 1)), readTVarIO runs)
+  pure (atomically $ modifyTVar' runs (+ 1) >> readTVar runs, readTVarIO runs)
 
 spec :: Spec
 spec = describe "reconnecting" $ do

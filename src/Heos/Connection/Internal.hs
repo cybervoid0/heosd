@@ -2,12 +2,10 @@ module Heos.Connection.Internal where
 
 import Control.Concurrent (MVar, newMVar, threadDelay, withMVar)
 import Control.Concurrent.Async (Concurrently (..), race)
-import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, putTMVar, readTVar, stateTVar, takeTMVar, tryPutTMVar, writeTChan, writeTVar)
+import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, readTVar, takeTMVar, tryPutTMVar, writeTChan, writeTVar)
 import Control.Exception (Exception, IOException, bracket, bracket_, finally, handle, throwIO, try)
 import Control.Monad (forM_, forever, unless, when)
 import Data.Aeson (eitherDecodeStrict)
-import Data.Bifunctor (Bifunctor (first))
-import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Foldable (asum)
 import Data.Map.Strict (Map)
@@ -17,6 +15,7 @@ import Data.Text qualified as T
 import Data.Void (Void, absurd)
 import GHC.Exception (displayException)
 import Heos.Command (Command (GetGroups, GetMusicSources, GetNowPlayingMedia, GetPlayState, GetPlayers, GetVolume, HeartBeat, RegisterForChangeEvents), renderCommand)
+import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Connection.Parameters (ConnectionParams (..), defaultParams)
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), IncomingEnvelope (..), classifyEnvelope)
 import Heos.Player (OnOff (Off, On))
@@ -27,25 +26,13 @@ import Network.Socket.ByteString (recv, sendAll)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
-data ConnectionError = ConnectionLost | ConnectionTimeout deriving (Show, Eq)
+data ConnectionError = ConnectionLost | ConnectionTimeout | LineTooLong deriving (Show, Eq)
 instance Exception ConnectionError where
   displayException ConnectionLost = "the device closed the connection"
   displayException ConnectionTimeout = "the device did not answer in time"
+  displayException LineTooLong = "the device sent a line longer than allowed"
 
 type EitherEnvelope = Either ConnectionError Envelope
-
--- | Split a chunk of the socket stream into complete lines and the unfinished
---   tail. Lines are delimited by **\\r\\n**, which is dropped. The tail has no
---   delimiter yet: keep it and prepend it to the next chunk.
-splitLines :: ByteString -> ([ByteString], ByteString)
-splitLines bs
-  | BS.null after = ([], line)
-  -- add 'line' to the first element of the 'splitLines' function call result (a tuple)
-  | otherwise = first (line :) (splitLines next)
- where
-  delimiter = "\r\n"
-  (line, after) = BS.breakSubstring delimiter bs
-  next = BS.drop (BS.length delimiter) after -- the stream after the delimiter
 
 -- | The two TCP sockets to the device, as the vendor recommends: one
 --   carries notifications, the other carries commands, so a burst of
@@ -153,28 +140,33 @@ runConnection params sockets@(ConnectionSockets eSock cSock) act = do
 --   the events socket also gets replies to its own commands. A reply with no box to go to is a stray (late, or
 --   unsolicited): it is logged and dropped, never kept for the next command.
 --   Never returns; an empty recv means the device closed the connection,
---   and that is an error, not a reason to spin.
+--   and that is an error, not a reason to spin. Cutting the stream into
+--   lines is 'feedChunk'; a line that outgrows 'maxLineLength' without
+--   ending is a broken link, 'LineTooLong', so the buffer stays bounded.
 reader :: Socket -> ConnectionProps -> IO Void
-reader sock conn = go "" `finally` failAll
+reader sock conn = go emptyPending `finally` failAll
  where
-  go buffer = do
+  go pending = do
     chunk <- recv sock 4096
     -- пустой `recv` — это конец потока; бросить исключение, а не продолжать
     when (BS.null chunk) $ throwIO ConnectionLost
-    let (complete, rest) = splitLines (buffer <> chunk)
-    forM_ complete $ \bs -> do
-      let eitherIncEnv = classifyEnvelope <$> eitherDecodeStrict bs
-      case eitherIncEnv of
-        Right (IncomingEvent event _) -> atomically . writeTChan conn.events $ event
-        Right (IncomingPending _) -> pure ()
-        Right (IncomingResponse _ env) -> do
-          delivered <- atomically $ do
-            mapIntBox <- readTVar conn.waiting
-            let mbBox = findBox env.heos.message mapIntBox
-            maybe (pure False) (\box -> True <$ putTMVar box (Right env)) mbBox
-          unless delivered $ putStrLn ("stray reply: " <> show env)
-        Left err -> print $ show bs <> err
-    go rest
+    let (complete, pending') = feedChunk pending chunk
+    forM_ complete route
+    when (pending'.size > conn.params.maxLineLength) $ throwIO LineTooLong
+    go pending'
+  -- одна полная строка: разобрать и доставить по назначению
+  route bs = do
+    let eitherIncEnv = classifyEnvelope <$> eitherDecodeStrict bs
+    case eitherIncEnv of
+      Right (IncomingEvent event _) -> atomically . writeTChan conn.events $ event
+      Right (IncomingPending _) -> pure ()
+      Right (IncomingResponse _ env) -> do
+        delivered <- atomically $ do
+          mapIntBox <- readTVar conn.waiting
+          let mbBox = findBox env.heos.message mapIntBox
+          maybe (pure False) (\box -> tryPutTMVar box (Right env)) mbBox
+        unless delivered $ putStrLn ("stray reply: " <> show env)
+      Left err -> print $ show bs <> err
   -- при любом завершении (`finally`): пройти по всей карте, положить в каждую коробочку `Left ConnectionLost`, карту очистить.
   failAll = atomically $ do
     boxes <- readTVar conn.waiting
@@ -198,6 +190,11 @@ findBox mbSeqTxt boxes = case seqNo of
 -- | A private copy of the event stream. Each call gets its own copy, so
 --   subscribers don't steal events from each other. Only events arriving
 --   after the call are seen: subscribe before you ask the device for them.
+--
+--   The copy is unbounded: every event stays in it until read. Subscribe
+--   only from a thread that keeps reading for as long as it holds the
+--   channel; a copy that is dropped costs nothing, a copy that is kept but
+--   not read grows with every event.
 subscribe :: Connection -> IO (TChan HeosEvent)
 subscribe conn = atomically $ dupTChan conn.props.events
 
@@ -210,7 +207,9 @@ subscribe conn = atomically $ dupTChan conn.props.events
 --   bracket however the wait ends: reply, timeout or cancellation.
 sendOn :: Socket -> ConnectionProps -> Command -> IO Envelope
 sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
-  seqNo <- atomically $ stateTVar props.nextSeq (\n -> (n, n + 1))
+  -- взять номер и сдвинуть счётчик; modifyTVar' вычисляет n + 1 сразу,
+  -- иначе в TVar лежал бы thunk до следующего чтения
+  seqNo <- atomically $ readTVar props.nextSeq <* modifyTVar' props.nextSeq (+ 1)
   box <- newEmptyTMVarIO
   bracket_ (open seqNo box) (closeBox seqNo) (go seqNo box)
  where

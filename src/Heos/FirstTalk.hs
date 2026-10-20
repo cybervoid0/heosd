@@ -29,8 +29,11 @@ volumeTracker ch volumeRef =
   forever $
     atomically (readTChan ch) >>= \case
       HeosEvent "player_volume_changed" params -> do
-        let mbVolume = lookupParam "level" params >>= readMaybe . T.unpack
-        atomically $ writeTVar volumeRef mbVolume
+        -- вычислить число до записи: иначе в TVar лежал бы thunk, держащий событие
+        let !volume = case lookupParam "level" params >>= readMaybe . T.unpack of
+              Just !v -> Just v
+              Nothing -> Nothing
+        atomically $ writeTVar volumeRef volume
       _ -> pure ()
 
 remote :: Connection -> TVar (Maybe Int) -> IO ()

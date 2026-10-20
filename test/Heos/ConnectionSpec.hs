@@ -13,7 +13,8 @@ import Data.Text.Encoding qualified as T
 import Heos.Command (Command (..))
 import Heos.Player (PlayerId (..))
 import Data.Map.Strict qualified as Map
-import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), findBox, initialize, runConnection, sendCommand, splitLines, subscribe)
+import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
+import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), findBox, initialize, runConnection, sendCommand, subscribe)
 import Heos.Connection.Parameters (ConnectionParams (..))
 import Heos.FakeDevice (answering, commandPath, commandQuery)
 import Heos.Time (Seconds (..))
@@ -36,14 +37,17 @@ chunksAt :: [Int] -> ByteString -> [ByteString]
 chunksAt [] bs = [bs]
 chunksAt (n : ns) bs = let (h, t) = BS.splitAt n bs in h : chunksAt ns t
 
--- Feed chunks one by one, carrying the remainder, as the read loop of stage 13
--- will do.
+-- Feed chunks one by one through the reader's framing, the way recv hands
+-- them out. Returns the lines and what is still pending, joined back.
 feed :: [ByteString] -> ([ByteString], ByteString)
-feed = foldl step ([], "")
+feed = fmap pendingBytes . foldl step ([], emptyPending)
  where
-  step (done, buffer) chunk =
-    let (complete, rest) = splitLines (buffer <> chunk)
-     in (done <> complete, rest)
+  step (done, tail') chunk =
+    let (complete, tail'') = feedChunk tail' chunk
+     in (done <> complete, tail'')
+
+pendingBytes :: Pending -> ByteString
+pendingBytes tail' = BS.concat (reverse tail'.chunks)
 
 -- A pair of connected sockets, no network involved. `ours` goes to
 -- runConnection; the test writes into `theirs`, playing the receiver.
@@ -105,7 +109,7 @@ exchange conn theirs cmd inspect replies = do
 -- at once, short enough to fail a test rather than hang it. Heartbeats are
 -- an hour apart so they never interfere with the command under test.
 testParams :: ConnectionParams
-testParams = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1}
+testParams = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1, maxLineLength = 64 * 1024}
 
 -- The device's ends of both lanes: the test reads here what the daemon
 -- sent and writes what the device would answer.
@@ -189,6 +193,40 @@ spec = do
           threadDelay 50000
           sendAll theirs secondHalf
           nextEvent ch `shouldReturn` volumeEvent "7"
+
+    -- The delimiter itself can be cut in two: "\r" at the end of one recv,
+    -- "\n" at the start of the next. The reader looks for it across the
+    -- boundary, not only inside the new chunk.
+    it "reassembles an event whose line end is split between two pieces" $
+      withSocketPair $ \(ours, theirs) ->
+        run ours $ \conn -> do
+          ch <- subscribe conn
+          let line = eventLine "player_volume_changed" "pid=1&level=8"
+              (firstHalf, secondHalf) = BS.splitAt (BS.length line - 1) line
+          BS.last firstHalf `shouldBe` 13 -- "\r"
+          sendAll theirs firstHalf
+          threadDelay 50000
+          sendAll theirs secondHalf
+          nextEvent ch `shouldReturn` volumeEvent "8"
+
+    -- A browse reply is far longer than one recv (4 KiB). The reader
+    -- accumulates chunks until the line ends and delivers it whole.
+    it "delivers a line many times longer than one recv" $
+      withSocketPair $ \(ours, theirs) ->
+        run ours $ \conn -> do
+          ch <- subscribe conn
+          let msg = "pid=1&level=9&pad=" <> BC.replicate 20000 'x'
+          sendAll theirs (eventLine "player_volume_changed" msg)
+          nextEvent ch `shouldReturn` HeosEvent "player_volume_changed" (decodeQuery (T.decodeUtf8 msg))
+
+    -- Without a cap, a device that never sends "\r\n" would grow the
+    -- reader's buffer forever. Past maxLineLength the link counts as broken.
+    it "ends with LineTooLong when the device sends more than maxLineLength without a line end" $
+      withSocketPair $ \(ours, theirs) -> do
+        let stuck = runWith testParams{maxLineLength = 1000} ours $ \(_ :: Connection) -> do
+              sendAll theirs (BC.replicate 5000 'x')
+              forever (threadDelay 100000)
+        timeout 2000000 stuck `shouldThrow` (== LineTooLong)
 
     it "gives every subscriber its own copy of each event" $
       withSocketPair $ \(ours, theirs) ->
@@ -549,6 +587,39 @@ spec = do
         forAll genBytes $ \s ->
           forAll (listOf (choose (0, 5))) $ \cuts ->
             feed (chunksAt cuts s) === splitLines s
+
+  describe "feedChunk" $ do
+    it "keeps a chunk without a line end pending, without copying it" $
+      feedChunk emptyPending "abc" `shouldBe` ([], Pending ["abc"] 3)
+
+    it "ignores an empty chunk" $
+      feedChunk (Pending ["ab\r"] 3) "" `shouldBe` ([], Pending ["ab\r"] 3)
+
+    it "adds a second chunk in front of the first" $
+      feedChunk (Pending ["abc"] 3) "de" `shouldBe` ([], Pending ["de", "abc"] 5)
+
+    it "joins the pending chunks into the line they complete" $
+      feedChunk (Pending ["de", "abc"] 5) "f\r\n" `shouldBe` (["abcdef"], emptyPending)
+
+    it "keeps what follows the last line end as the new tail" $
+      feedChunk (Pending ["ab"] 2) "c\r\nd\r\nef" `shouldBe` (["abc", "d"], Pending ["ef"] 2)
+
+    -- "\r" at the end of the tail and "\n" at the start of the chunk is a
+    -- line end too, though neither chunk contains it on its own.
+    it "finds a line end split between the tail and the chunk" $
+      feedChunk (Pending ["ab\r"] 3) "\ncd" `shouldBe` (["ab"], Pending ["cd"] 2)
+
+    describe "properties" $ do
+      it "counts the pending bytes correctly" $
+        forAll genBytes $ \s ->
+          forAll (listOf (choose (0, 5))) $ \cuts ->
+            let (_, tail') = foldl (\(_, p) c -> feedChunk p c) ([], emptyPending) (chunksAt cuts s)
+             in tail'.size === BS.length (pendingBytes tail')
+
+      it "never leaves a line end in the pending tail" $
+        forAll genBytes $ \s ->
+          forAll (listOf (choose (0, 5))) $ \cuts ->
+            not (BS.isInfixOf "\r\n" (snd (feed (chunksAt cuts s))))
  where
   getPlayers =
     "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"success\", \"message\": \"\"}, \"payload\": [{\"name\": \"Marantz MODEL 60n\", \"pid\": -1245882071}]}"

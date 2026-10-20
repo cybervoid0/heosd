@@ -88,6 +88,7 @@ library
                       Heos.Connection.Internal
                       Heos.Connection.Reconnect
                       Heos.Connection.Parameters
+                      Heos.Connection.Framing
                       Heos.Effect
                       Heos.Handler.Live
                       Heos.Handler.Fake
