@@ -2,6 +2,8 @@ module Heos.FirstTalk (firstTalk) where
 
 import Control.Concurrent.Async (concurrently_, race_)
 import Control.Concurrent.STM
+import Control.DeepSeq (force)
+import Control.Exception (evaluate)
 import Control.Monad (forever)
 import Data.Text qualified as T
 import Data.Void (Void)
@@ -30,9 +32,7 @@ volumeTracker ch volumeRef =
     atomically (readTChan ch) >>= \case
       HeosEvent "player_volume_changed" params -> do
         -- вычислить число до записи: иначе в TVar лежал бы thunk, держащий событие
-        let !volume = case lookupParam "level" params >>= readMaybe . T.unpack of
-              Just !v -> Just v
-              Nothing -> Nothing
+        volume <- evaluate . force $ lookupParam "level" params >>= readMaybe . T.unpack
         atomically $ writeTVar volumeRef volume
       _ -> pure ()
 

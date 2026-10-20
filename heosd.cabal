@@ -120,6 +120,7 @@ library
                   , retry
                   , containers
                   , exceptions
+                  , deepseq
                   
         
     -- Directories containing source files.
