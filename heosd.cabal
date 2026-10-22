@@ -70,6 +70,7 @@ common defaults
                         OverloadedRecordDot
                         DuplicateRecordFields
                         StrictData
+                        PartialTypeSignatures
     build-depends:      base ^>=4.21.0.0
 
 library
@@ -97,9 +98,11 @@ library
                       Heos.Mcp
                       Heos.Http
                       Heos.Command
+                      Heos.Command.Internal
                       Heos.ToParam
                       Heos.FirstTalk
                       Heos.Time
+                      Heos.Json
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -169,6 +172,7 @@ test-suite heosd-test
                       Heos.DiscoverySpec
                       Heos.ConnectionSpec
                       Heos.ReconnectSpec
+                      Heos.PayloadSpec
                       Heos.FakeDevice
 
     build-tool-depends: hspec-discover:hspec-discover

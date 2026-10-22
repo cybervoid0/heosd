@@ -11,7 +11,7 @@ import Heos.Command (Command (..))
 import Heos.Connection (Connection, sendCommand, subscribe, withReconnect)
 import Heos.Connection.Parameters (ConnectionParams (..), defaultParams)
 import Heos.Envelope (HeosEvent (..))
-import Heos.Player (PlayState (Pause, Play), PlayerId)
+import Heos.Player (PlayState (..), PlayerId)
 import Heos.Url (lookupParam)
 import Text.Read (readMaybe)
 

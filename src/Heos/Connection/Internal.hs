@@ -17,8 +17,14 @@ import GHC.Exception (displayException)
 import Heos.Command (Command (GetGroups, GetMusicSources, GetNowPlayingMedia, GetPlayState, GetPlayers, GetVolume, HeartBeat, RegisterForChangeEvents), renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Connection.Parameters (ConnectionParams (..), defaultParams)
-import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), IncomingEnvelope (..), classifyEnvelope)
-import Heos.Player (OnOff (Off, On))
+import Heos.Envelope (
+  Envelope (..),
+  HeosEvent (..),
+  HeosHeader (..),
+  IncomingEnvelope (..),
+  classifyEnvelope,
+ )
+import Heos.Player (OnOff (..))
 import Heos.Time (toMicros)
 import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)

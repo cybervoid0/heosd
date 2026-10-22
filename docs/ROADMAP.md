@@ -838,14 +838,14 @@ withReconnect :: (Connection -> IO a) -> IO a
 
 ### Этап 26 · Эффект Heos
 
-- [ ] сделано
+- [x] сделано
 
 **Делаем:** объявляем эффект — десяток операций, не больше.
 
 ```haskell
 data Heos :: Effect where
   GetPlayers   :: Heos m [Player]
-  NowPlaying   :: PlayerId -> Heos m NowPlaying
+  GetNowPlaying :: PlayerId -> Heos m NowPlaying
   SetPlayState :: PlayerId -> PlayState -> Heos m ()
   ...
 type instance DispatchOf Heos = Dynamic

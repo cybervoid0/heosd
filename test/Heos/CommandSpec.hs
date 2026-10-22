@@ -6,7 +6,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
 import Heos.Command
 import Heos.Media (ContainerId (..), MediaId (..), SearchCriteriaId (..), SourceId (..))
-import Heos.Player (GroupId (..), OnOff (..), PlayState (..), PlayerId (..), RepeatMode (..))
+import Heos.Player (GroupId (..), OnOff (..), PlayState (..), PlayerId (..), QueueId (..))
 import Heos.ToParam (ToParam (..))
 import Heos.Url.Internal (UrlResponse (..), decodeCommandUrl, lookupParam)
 import Test.Hspec
@@ -108,8 +108,8 @@ spec = do
       toParam (Range 0 10) `shouldBe` "0,10"
 
     it "a list is comma-separated, a one-item list has no comma" $ do
-      toParam [Qid 4, Qid 5, Qid 6] `shouldBe` "4,5,6"
-      toParam [Qid 4] `shouldBe` "4"
+      toParam [QueueId 4, QueueId 5, QueueId 6] `shouldBe` "4,5,6"
+      toParam [QueueId 4] `shouldBe` "4"
 
     it "negative player ids keep their sign" $
       wire (GetVolume (PlayerId (-1245882071))) `shouldBe` expect "heos://player/get_volume?pid=-1245882071"
@@ -189,11 +189,11 @@ specExamples =
   , ("4.2.13", GetPlayMode (PlayerId 1), "heos://player/get_play_mode?pid=1")
   , ("4.2.14", SetPlayMode (PlayerId 1) RepeatAll Off, "heos://player/set_play_mode?pid=1&repeat=on_all&shuffle=off")
   , ("4.2.15", GetQueue (PlayerId 1) (Just (Range 0 10)), "heos://player/get_queue?pid=1&range=0,10")
-  , ("4.2.16", PlayQueueItem (PlayerId 2) (Qid 9), "heos://player/play_queue?pid=2&qid=9")
-  , ("4.2.17", RemoveFromQueue (PlayerId 1) [Qid 4, Qid 5, Qid 6], "heos://player/remove_from_queue?pid=1&qid=4,5,6")
+  , ("4.2.16", PlayQueueItem (PlayerId 2) (QueueId 9), "heos://player/play_queue?pid=2&qid=9")
+  , ("4.2.17", RemoveFromQueue (PlayerId 1) [QueueId 4, QueueId 5, QueueId 6], "heos://player/remove_from_queue?pid=1&qid=4,5,6")
   , ("4.2.18", SaveQueue (PlayerId 1) "great playlist", "heos://player/save_queue?pid=1&name=great playlist")
   , ("4.2.19", ClearQueue (PlayerId 1), "heos://player/clear_queue?pid=1")
-  , ("4.2.20", MoveQueue (PlayerId 2) [Qid 2, Qid 4] (Qid 6), "heos://player/move_queue_item?pid=2&sqid=2,4&dqid=6")
+  , ("4.2.20", MoveQueue (PlayerId 2) [QueueId 2, QueueId 4] (QueueId 6), "heos://player/move_queue_item?pid=2&sqid=2,4&dqid=6")
   , ("4.2.21", PlayNext (PlayerId 1), "heos://player/play_next?pid=1")
   , ("4.2.22", PlayPrevious (PlayerId 1), "heos://player/play_previous?pid=1")
   , ("4.2.23", SetQuickSelect (PlayerId 1) (QuickSelectId 2), "heos://player/set_quickselect?pid=1&id=2")
