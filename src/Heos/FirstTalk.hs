@@ -5,13 +5,15 @@ import Control.Concurrent.STM
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Control.Monad (forever)
+import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Data.Void (Void)
-import Heos.Command (Command (..))
-import Heos.Connection (Connection, sendCommand, subscribe, withReconnect)
-import Heos.Connection.Parameters (ConnectionParams (..), defaultParams)
+import Effectful (Eff, IOE, MonadIO (liftIO), runEff, (:>))
+import Heos.Connection (subscribe, withReconnect)
+import Heos.Effect (Heos, playNext, playPrevious, setPlayState, volumeDown, volumeUp)
 import Heos.Envelope (HeosEvent (..))
-import Heos.Player (PlayState (..), PlayerId)
+import Heos.Handler.Live (runHeosLife)
+import Heos.Player (PlayState (..))
 import Heos.Url (lookupParam)
 import Text.Read (readMaybe)
 
@@ -21,7 +23,7 @@ firstTalk = withReconnect $ \conn -> do
   printChan <- subscribe conn
   volChan <- subscribe conn
   volumeRef <- newTVarIO (Nothing :: Maybe Int)
-  race_ (printer printChan `concurrently_` volumeTracker volChan volumeRef) (remote conn volumeRef)
+  race_ (printer printChan `concurrently_` volumeTracker volChan volumeRef) (runEff $ runHeosLife conn (remote volumeRef))
 
 printer :: TChan HeosEvent -> IO Void
 printer ch = forever $ atomically (readTChan ch) >>= print
@@ -36,27 +38,21 @@ volumeTracker ch volumeRef =
         atomically $ writeTVar volumeRef volume
       _ -> pure ()
 
-remote :: Connection -> TVar (Maybe Int) -> IO ()
-remote conn volumeRef = do
-  line <- getLine
-  case line of
+remote :: (Heos :> es, IOE :> es) => TVar (Maybe Int) -> Eff es ()
+remote volumeRef =
+  liftIO getLine >>= \case
     "q" -> pure ()
     "v" -> do
-      volume <- readTVarIO volumeRef
-      putStrLn (maybe "Volume: unknown" (("Volume: " <>) . show) volume)
-      remote conn volumeRef
-    _ -> do
-      case keyToCommand line defaultParams.playerId of
-        Just cmd -> sendCommand conn cmd >>= print
-        Nothing -> putStrLn "команды: + - > || >> << q v"
-      remote conn volumeRef
-
-keyToCommand :: String -> PlayerId -> Maybe Command
-keyToCommand cmd pid = case cmd of
-  "+" -> Just $ VolumeUp pid 1
-  "-" -> Just $ VolumeDown pid 1
-  ">" -> Just $ SetPlayState pid Play
-  "||" -> Just $ SetPlayState pid Pause
-  ">>" -> Just $ PlayNext pid
-  "<<" -> Just $ PlayPrevious pid
-  _ -> Nothing
+      volume <- liftIO $ readTVarIO volumeRef
+      liftIO $ putStrLn (maybe "Volume: unknown" (("Volume: " <>) . show) volume)
+      remote volumeRef
+    line -> fromMaybe (liftIO $ putStrLn "команды: + - > || >> << q v") (keyToCommand line) >> remote volumeRef
+ where
+  keyToCommand = \case
+    "+" -> Just $ volumeUp 1
+    "-" -> Just $ volumeDown 1
+    ">" -> Just $ setPlayState Play
+    "||" -> Just $ setPlayState Pause
+    ">>" -> Just playNext
+    "<<" -> Just playPrevious
+    _ -> Nothing

@@ -6,10 +6,12 @@ module Heos.Player (
   QueueId (..),
   Network (..),
   PlayState (..),
+  parsePlayState,
   OnOff (..),
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), genericParseJSON, withText)
+import Data.List (find)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
@@ -76,12 +78,14 @@ data NowPlaying = NowPlaying
 instance FromJSON NowPlaying where
   parseJSON = genericParseJSON heosJson
 
-data PlayState = Play | Pause | Stop deriving (Show, Eq)
+data PlayState = Play | Pause | Stop deriving (Show, Eq, Enum, Bounded)
 instance ToParam PlayState where
   toParam = \case
     Play -> "play"
     Pause -> "pause"
     Stop -> "stop"
+parsePlayState :: Text -> Maybe PlayState
+parsePlayState t = find ((== t) . toParam) [minBound .. maxBound]
 
 data OnOff = On | Off deriving (Show, Eq)
 instance ToParam OnOff where

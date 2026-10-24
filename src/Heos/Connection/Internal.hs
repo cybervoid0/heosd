@@ -24,7 +24,7 @@ import Heos.Envelope (
   IncomingEnvelope (..),
   classifyEnvelope,
  )
-import Heos.Player (OnOff (..))
+import Heos.Player (OnOff (..), PlayerId)
 import Heos.Time (toMicros)
 import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
@@ -68,6 +68,13 @@ data Connection = Connection
   { sockets :: ConnectionSockets
   , props :: ConnectionProps
   }
+
+-- | The parameters this connection was opened with.
+connectionParams :: Connection -> ConnectionParams
+connectionParams conn = conn.props.params
+
+getPid :: ConnectionParams -> PlayerId
+getPid params = params.playerId
 
 -- | The start-up sequence the vendor prescribes: events off, the state
 --   queries, events on. Subscription commands go over the events socket,

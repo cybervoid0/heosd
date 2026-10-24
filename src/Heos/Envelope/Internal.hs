@@ -9,7 +9,11 @@ import GHC.Generics (Generic)
 import Heos.Url (UrlParam (UrlFlag), decodeQuery, lookupParam)
 import Text.Read (readMaybe)
 
-data HeosError = HeosError {eid :: Maybe Int, text :: Maybe Text} deriving (Show, Eq)
+data HeosError = HeosError
+  { eid :: Maybe Int
+  , text :: Maybe Text
+  }
+  deriving (Show, Eq)
 findError :: Text -> HeosError
 findError msg = HeosError{eid, text}
  where
@@ -26,7 +30,12 @@ instance FromJSON HeosResult where
   -- parse "success" as Success and "fail" to Fail
   parseJSON = genericParseJSON lowerTags
 
-data HeosHeader = HeosHeader {command :: Text, result :: Maybe HeosResult, message :: Maybe Text} deriving (Show, Eq, Generic)
+data HeosHeader = HeosHeader
+  { command :: Text
+  , result :: Maybe HeosResult
+  , message :: Maybe Text
+  }
+  deriving (Show, Eq, Generic)
 instance FromJSON HeosHeader
 
 data Envelope = Envelope
@@ -40,7 +49,11 @@ instance FromJSON Envelope
 
 data HeosOutcome = Succeeded | Failed HeosError deriving (Show, Eq)
 
-data HeosEvent = HeosEvent {name :: Text, params :: [UrlParam]} deriving (Show, Eq)
+data HeosEvent = HeosEvent
+  { name :: Text
+  , params :: [UrlParam]
+  }
+  deriving (Show, Eq)
 
 data IncomingEnvelope
   = IncomingEvent HeosEvent Envelope
