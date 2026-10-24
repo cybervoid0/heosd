@@ -85,7 +85,8 @@ library
     import:           defaults
 
     -- Modules exported by the library.
-    exposed-modules:  Heos.Url
+    exposed-modules:  Heos
+                      Heos.Url
                       Heos.Url.Internal
                       Heos.Envelope
                       Heos.Envelope.Internal
@@ -108,9 +109,9 @@ library
                       Heos.Command
                       Heos.Command.Internal
                       Heos.ToParam
-                      Heos.FirstTalk
                       Heos.Time
                       Heos.Json
+                      FirstTalk
 
     -- Modules included in this library but not exported.
     -- other-modules:

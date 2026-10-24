@@ -1,4 +1,4 @@
-module Heos.FirstTalk (firstTalk) where
+module FirstTalk (firstTalk) where
 
 import Control.Concurrent.Async (concurrently_, race_)
 import Control.Concurrent.STM
@@ -9,12 +9,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Data.Void (Void)
 import Effectful (Eff, IOE, MonadIO (liftIO), runEff, (:>))
-import Heos.Connection (subscribe, withReconnect)
-import Heos.Effect (Heos, playNext, playPrevious, setPlayState, volumeDown, volumeUp)
-import Heos.Envelope (HeosEvent (..))
-import Heos.Handler.Live (runHeosLife)
-import Heos.Player (PlayState (..))
-import Heos.Url (lookupParam)
+import Heos
 import Text.Read (readMaybe)
 
 -- Стенд

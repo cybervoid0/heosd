@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Heos.FirstTalk (firstTalk)
+import FirstTalk (firstTalk)
 
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 
