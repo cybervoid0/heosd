@@ -10,7 +10,7 @@ import Data.List (find)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Heos.Envelope (Envelope (..))
-import Heos.Media (ContainerId (..), MediaId (..), MusicSource (..), SearchResult (..), SourceId (..), TrueFalse (..), YesNo (..))
+import Heos.Media (ContainerId (..), Found (..), MediaId (..), MusicSource (..), Playable (..), SearchCriteriaId (..), SearchCriterion, SearchKind (..), SearchResult (..), SourceId (..), TrueFalse (..), YesNo (..), criterionFor, toFound)
 import Heos.Player (Network (..), NowPlaying (..), Player (..), PlayerId (..), QueueId (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -99,6 +99,45 @@ spec = do
       r.mid `shouldBe` Nothing
       r.album `shouldBe` Nothing
       r.album_id `shouldBe` Nothing
+
+  -- The criteria are per source: the device says which scid means what.
+  describe "criterionFor" $ do
+    it "finds the scid of each kind in the Tidal criteria reply" $ do
+      crits <- payloadOf "search_criteria.json" >>= decodeAs @[SearchCriterion]
+      map (`criterionFor` crits) [Artist, Album, Track, Playlist]
+        `shouldBe` map (Just . SearchCriteriaId) [1, 2, 3, 6]
+
+    it "finds nothing when the source offers no criteria" $
+      criterionFor Track [] `shouldBe` Nothing
+
+  -- From what the device sent to what the scenario can play.
+  describe "toFound" $ do
+    it "turns searched songs into tracks of the SEARCHED_TRACKS container" $ do
+      results <- payloadOf "search_ok_computer.json" >>= decodeAs @[SearchResult]
+      let found = map (toFound (SourceId 10) "Ok Computer") results
+      length found `shouldBe` 50
+      map (.kind) found `shouldSatisfy` all (== "song")
+      let targets = [t | Found{target = Just t} <- found]
+      length targets `shouldBe` 50
+      targets `shouldSatisfy` all (\case PlayTrack (SourceId 10) (ContainerId "SEARCHED_TRACKS-Ok Computer") _ -> True; _ -> False)
+      case found of
+        f : _ -> do
+          f.name `shouldBe` "ok computer"
+          f.artist `shouldBe` Just "Sef"
+          f.target `shouldBe` Just (PlayTrack (SourceId 10) (ContainerId "SEARCHED_TRACKS-Ok Computer") (MediaId "443242295"))
+        [] -> expectationFailure "no results"
+
+    it "turns a container into PlayContainer with its cid" $ do
+      r <- either fail pure (eitherDecodeStrict @SearchResult "{\"container\": \"yes\", \"cid\": \"77\", \"type\": \"album\", \"playable\": \"yes\", \"name\": \"OK Computer\", \"image_url\": \"x\"}")
+      (toFound (SourceId 10) "q" r).target `shouldBe` Just (PlayContainer (SourceId 10) (ContainerId "77"))
+
+    it "gives no target to an item the device marks unplayable" $ do
+      r <- either fail pure (eitherDecodeStrict @SearchResult "{\"container\": \"no\", \"mid\": \"5\", \"type\": \"song\", \"playable\": \"no\", \"name\": \"x\", \"image_url\": \"x\"}")
+      (toFound (SourceId 10) "q" r).target `shouldBe` Nothing
+
+    it "gives no target to a song without a mid" $ do
+      r <- either fail pure (eitherDecodeStrict @SearchResult "{\"container\": \"no\", \"type\": \"song\", \"playable\": \"yes\", \"name\": \"x\", \"image_url\": \"x\"}")
+      (toFound (SourceId 10) "q" r).target `shouldBe` Nothing
 
   -- Two spellings of yes in one protocol: search results say "yes"/"no",
   -- sources say "true"/"false". Each parser accepts only its own.

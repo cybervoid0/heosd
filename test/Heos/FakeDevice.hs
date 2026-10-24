@@ -2,7 +2,7 @@
 --   command with a success reply that echoes the command's path and query,
 --   SEQUENCE included, the way the real device does; so 'findBox' finds the
 --   right box and the connection code can't tell it from a real one.
-module Heos.FakeDevice (answering, commandPath, commandQuery) where
+module Heos.FakeDevice (answering, answeringWith, replyTo, commandPath, commandQuery) where
 
 import Control.Monad (forM_, unless)
 import Data.ByteString (ByteString)
@@ -13,10 +13,16 @@ import Heos.Connection.Framing (emptyPending, feedChunk)
 import Network.Socket (Socket)
 import Network.Socket.ByteString (recv, sendAll)
 
--- | Read commands and answer each one until the other side hangs up. Every
---   command line is handed to the callback first, so a test can log it.
+-- | Read commands and answer each one with the echo reply until the other
+--   side hangs up. Every command line is handed to the callback first, so a
+--   test can log it.
 answering :: (ByteString -> IO ()) -> Socket -> IO ()
-answering record sock = go emptyPending
+answering = answeringWith replyTo
+
+-- | 'answering' with the reply chosen by the test: the function gets the
+--   command line and returns the whole reply line, "\r\n" included.
+answeringWith :: (ByteString -> ByteString) -> (ByteString -> IO ()) -> Socket -> IO ()
+answeringWith reply record sock = go emptyPending
  where
   go pending = do
     chunk <- recv sock 4096
@@ -24,9 +30,10 @@ answering record sock = go emptyPending
       let (complete, pending') = feedChunk pending chunk
       forM_ complete $ \line -> do
         record line
-        sendAll sock (replyTo line)
+        sendAll sock (reply line)
       go pending'
 
+-- | The echo reply: success, with the command's own query as the message.
 replyTo :: ByteString -> ByteString
 replyTo line =
   "{\"heos\": {\"command\": \"" <> commandPath line <> "\", \"result\": \"success\", \"message\": \"" <> commandQuery line <> "\"}}\r\n"

@@ -181,6 +181,7 @@ test-suite heosd-test
                       Heos.ConnectionSpec
                       Heos.ReconnectSpec
                       Heos.PayloadSpec
+                      Heos.LiveSpec
                       Heos.FakeDevice
 
     build-tool-depends: hspec-discover:hspec-discover
@@ -193,6 +194,7 @@ test-suite heosd-test
                     , stm
                     , async
                     , retry
+                    , effectful
                     , hspec
                     , QuickCheck
                     , directory
