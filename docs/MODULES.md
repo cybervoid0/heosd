@@ -10,14 +10,24 @@
 | -- | -- | -- |
 | `Heos.Time` | время | `Seconds` |
 | `Heos.ToParam` | «как значение пишется в URL» | класс `ToParam`, `.=`, `.=?` |
-| `Heos.Player` | плеер и то, что он играет | `PlayerId`, `GroupId`, `QueueId`, `PlayState`, `OnOff`, `Network`, `Player`, `NowPlaying` |
-| `Heos.Media` | музыка и источники | `SourceId`, `ContainerId`, `MediaId`, `SearchCriteriaId`, `SearchKind`, `SearchResult`, `MusicSource`, `YesNo`, `TrueFalse` |
+| `Heos.Json` | общие правила разбора JSON | `heosJson` |
+| `Heos.Types.Newtypes` | идентификаторы и обёртки над строками протокола | `PlayerId`, `GroupId`, `QueueId`, `SourceId`, `ContainerId`, `MediaId`, `SearchCriteriaId`, `YesNo`, `TrueFalse` |
+| `Heos.Types.Enums` | перечисления | `PlayState`, `OnOff`, `Network`, `SearchKind`, `QueueMode`, `RepeatMode`, `Playable`, `Credentials` |
+| `Heos.Types.Records` | записи, которые приходят от аппарата или нужны сценарию | `Player`, `NowPlaying`, `Track`, `MusicSource`, `SearchResult`, `SearchCriterion`, `Found` |
+| `Heos.Types` | фасад над тремя файлами выше | своих нет |
 
-Принцип разделения `Player` и `Media`: `pid`, `gid`, `qid` про то, *на чём*
-играет, `sid`, `cid`, `mid`, `scid` про то, *что* играет.
+Деление по форме, а не по смыслу: идентификатор, перечисление, запись.
+Вопрос «это про плеер или про музыку» не нужен, достаточно «что это за
+штука». Порядок внутри: `Newtypes` ни от кого, `Enums` от `Newtypes`,
+`Records` от обоих.
 
-`heosJson` из `Config` просится в отдельный `Heos.Json`: `Config` будет
-импортировать `Player` и `Media`, а они его, и это цикл.
+Пишется везде `import Heos.Types` без списка, и в библиотеке, и в тестах.
+`Heos.Types` импортирует только `ToParam` и `Json`, поэтому его можно
+брать откуда угодно, цикла не будет. Если тип переехал между тремя файлами,
+импорты менять не надо.
+
+Рядом с типами лежат три чистые функции, которые знают только о них:
+`parsePlayState`, `toFound`, `criterionFor`.
 
 ## Протокол: как аппарат говорит
 
@@ -25,10 +35,10 @@
 | -- | -- | -- |
 | `Heos.Url` | строка `key=value&…` в обе стороны | `ParamKey`, `UrlPair`, `UrlParam`, `KeyFailure`, `UrlResponse` |
 | `Heos.Envelope` | одна строка JSON от аппарата | `Envelope`, `HeosHeader`, `HeosResult`, `HeosError`, `HeosOutcome`, `HeosEvent`, `IncomingEnvelope` |
-| `Heos.Command` | все команды спецификации, одна на конструктор | `Command`, `Credentials`, `Range`, `QueueMode`, `RepeatMode`, `ServiceOption`, `QuickSelectId`, `InputName` |
+| `Heos.Command` | все команды спецификации, одна на конструктор | `Command`, `Range`, `ServiceOption`, `QuickSelectId`, `InputName` |
 
-`Command` отправляет: его типам нужен `ToParam`. `Envelope`, `Player`,
-`Media` читают: их типам нужен `FromJSON`. Тип, который и отправляется, и
+`Command` отправляет: его типам нужен `ToParam`. `Envelope` и `Types`
+читают: их типам нужен `FromJSON`. Тип, который и отправляется, и
 читается (`PlayState`, `MediaId`), имеет оба экземпляра.
 
 ## Сеть: как до аппарата добраться
@@ -46,9 +56,10 @@
 
 | модуль | что в нём | типы |
 | -- | -- | -- |
-| `Heos.Effect` | операции эффекта и их обёртки | `Heos`, `Playable`, `Found` |
+| `Heos.Effect` | операции эффекта и их обёртки | `Heos`, `ProtocolError` |
 | `Heos.Handler.Live` | эффект поверх `Connection` | нет своих |
-| `Heos.Handler.Fake` | эффект поверх заготовок | `Fixtures` (появится) |
+| `Heos.Handler.Fake` | эффект поверх заготовок | `FakeState` |
+| `Heos.Handler.Fixtures` | заготовки для подделки: очередь из записанного ответа | своих нет |
 | `Heos.Service` | сценарии: найти и поставить, статус | появятся |
 
 `SearchResult` это как аппарат отвечает на поиск, `Found` это что из этого
@@ -59,7 +70,7 @@
 
 | модуль | что в нём | типы |
 | -- | -- | -- |
-| `Heos` | реэкспорт `Time`, `Player`, `Media`, `Envelope`, `Command`, `Connection`, `Effect`, `Handler.Live` | своих нет |
+| `Heos` | реэкспорт `Time`, `Types`, `ToParam`, `Envelope`, `Command`, `Connection`, `Effect`, `Handler.Live` | своих нет |
 
 `Heos` импортирует всё, поэтому сам он никому внутри библиотеки не нужен и
 никем не импортируется: иначе цикл. Им пользуются только потребители:

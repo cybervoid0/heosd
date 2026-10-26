@@ -3,8 +3,8 @@
 --   own instead of the defaults.
 module Heos.Connection.Parameters (ConnectionParams (..), defaultParams) where
 
-import Heos.Player (PlayerId (PlayerId))
 import Heos.Time (Seconds (..))
+import Heos.Types
 
 data ConnectionParams = ConnectionParams
   { commandTimeout :: Seconds

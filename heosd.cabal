@@ -90,8 +90,6 @@ library
                       Heos.Url.Internal
                       Heos.Envelope
                       Heos.Envelope.Internal
-                      Heos.Media
-                      Heos.Player
                       Heos.Config
                       Heos.Discovery
                       Heos.Discovery.Internal
@@ -103,6 +101,7 @@ library
                       Heos.Effect
                       Heos.Handler.Live
                       Heos.Handler.Fake
+                      Heos.Handler.Fixtures
                       Heos.Service
                       Heos.Mcp
                       Heos.Http
@@ -111,6 +110,10 @@ library
                       Heos.ToParam
                       Heos.Time
                       Heos.Json
+                      Heos.Types
+                      Heos.Types.Records
+                      Heos.Types.Enums
+                      Heos.Types.Newtypes
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -188,6 +191,7 @@ test-suite heosd-test
                       Heos.ReconnectSpec
                       Heos.PayloadSpec
                       Heos.LiveSpec
+                      Heos.FakeSpec
                       Heos.FakeDevice
 
     build-tool-depends: hspec-discover:hspec-discover

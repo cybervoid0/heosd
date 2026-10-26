@@ -15,22 +15,25 @@ module Heos.Effect (
   playNext,
   playPrevious,
   Heos (..),
+  ProtocolError (..),
 ) where
 
+import Control.Exception (Exception)
 import Control.Monad (forM_)
 import Data.Text (Text)
 import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, (:>))
 import Effectful.Dispatch.Dynamic (send)
-import Heos.Command (QueueMode (AddReplaceAndPlay, AddToEnd))
-import Heos.Media (Found, MusicSource, Playable, SearchKind, SourceId)
-import Heos.Player (NowPlaying, PlayState, Player)
+import Heos.Types
+
+newtype ProtocolError = ProtocolError Text deriving (Show)
+instance Exception ProtocolError
 
 {- the Heos effect: domain operations -}
 
 data Heos :: Effect where
   GetPlayersEff :: Heos m [Player]
   GetSourcesEff :: Heos m [MusicSource]
-  GetNowPlayingEff :: Heos m NowPlaying
+  GetNowPlayingEff :: Heos m Track
   GetVolumeEff :: Heos m Int
   GetPlayStateEff :: Heos m PlayState
   SetPlayStateEff :: PlayState -> Heos m ()
@@ -50,7 +53,7 @@ getPlayers = send GetPlayersEff
 getSources :: (Heos :> es) => Eff es [MusicSource]
 getSources = send GetSourcesEff
 
-getNowPlaying :: (Heos :> es) => Eff es NowPlaying
+getNowPlaying :: (Heos :> es) => Eff es Track
 getNowPlaying = send GetNowPlayingEff
 
 getVolume :: (Heos :> es) => Eff es Int

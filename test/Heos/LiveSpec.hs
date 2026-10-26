@@ -11,15 +11,13 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Maybe (fromMaybe)
 import Effectful (Eff, IOE, runEff)
-import Heos.Command (QueueMode (..))
 import Heos.Connection.Internal (ConnectionSockets (..), runConnection)
 import Heos.Connection.Parameters (ConnectionParams (..))
 import Heos.Effect
 import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, replyTo)
-import Heos.Handler.Live (ProtocolError (..), runHeosLife)
-import Heos.Media (ContainerId (..), Found (..), MediaId (..), Playable (..), SearchKind (..), SourceId (..))
-import Heos.Player (PlayState (..), Player (..), PlayerId (..))
+import Heos.Handler.Live (runHeosLife)
 import Heos.Time (Seconds (..))
+import Heos.Types
 import Network.Socket (Family (AF_UNIX), SocketType (Stream), close, socketPair)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -132,7 +130,7 @@ spec = describe "runHeosLife" $ do
       (found, cmds) <-
         withLive
           (scripted [("browse/get_search_criteria", criteria), ("browse/search", results)])
-          (search (SourceId 10) Track "Ok Computer")
+          (search (SourceId 10) TrackKind "Ok Computer")
       sent cmds
         `shouldBe` [ ("browse/get_search_criteria", "sid=10")
                    , ("browse/search", "sid=10&search=Ok Computer&scid=3")
@@ -147,10 +145,10 @@ spec = describe "runHeosLife" $ do
       (_, cmds) <-
         withLive
           (scripted [("browse/get_search_criteria", criteria), ("browse/search", results)])
-          (search (SourceId 10) Playlist "chill")
+          (search (SourceId 10) PlaylistKind "chill")
       map snd (sent cmds) `shouldBe` ["sid=10", "sid=10&search=chill&scid=6"]
 
     it "fails with a ProtocolError, without searching, when the source has no such criterion" $ do
       let noCriteria = "{\"heos\": {\"command\": \"browse/get_search_criteria\", \"result\": \"success\", \"message\": \"sid=3\"}, \"payload\": []}\r\n"
-      withLive (scripted [("browse/get_search_criteria", noCriteria)]) (search (SourceId 3) Track "x")
+      withLive (scripted [("browse/get_search_criteria", noCriteria)]) (search (SourceId 3) TrackKind "x")
         `shouldThrow` isProtocolError

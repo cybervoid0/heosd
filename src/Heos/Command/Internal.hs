@@ -2,17 +2,12 @@ module Heos.Command.Internal where
 
 import Data.ByteString (ByteString)
 import Data.Text (Text)
-import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
-import Heos.Media (ContainerId (..), MediaId (..), SearchCriteriaId (..), SourceId (..))
-import Heos.Player (GroupId, OnOff, PlayState, PlayerId, QueueId)
 import Heos.ToParam (ToParam (..), (.=), (.=?))
+import Heos.Types (ContainerId, Credentials (..), GroupId, MediaId, OnOff, PlayState, PlayerId, QueueId, QueueMode, RepeatMode, SearchCriteriaId, SourceId)
 import Heos.Url (UrlPair, renderCommandUrl)
 
 -- Two parameters, not one value, so no ToParam: see AccountSignIn in commandParts.
-data Credentials = Credentials {login :: Text, password :: Text} deriving (Eq)
-instance Show Credentials where
-  show (Credentials login _) = "Login=" <> T.unpack login <> " Password=<hidden>"
 
 data Range = Range {start :: Int, end :: Int} deriving (Show, Eq)
 instance ToParam Range where
@@ -25,22 +20,6 @@ instance ToParam QuickSelectId where
 newtype InputName = InputName Text deriving (Show, Eq) -- "inputs/aux_in_1", "inputs/hdmi_arc_1", ...
 instance ToParam InputName where
   toParam (InputName name) = name
-
-data RepeatMode = RepeatAll | RepeatOne | RepeatOff deriving (Show, Eq)
-instance ToParam RepeatMode where
-  toParam = \case
-    RepeatAll -> "on_all"
-    RepeatOne -> "on_one"
-    RepeatOff -> "off"
-
--- aid in 4.4.11 / 4.4.12
-data QueueMode = AddPlayNow | AddPlayNext | AddToEnd | AddReplaceAndPlay deriving (Show, Eq)
-instance ToParam QueueMode where
-  toParam = \case
-    AddPlayNow -> "1"
-    AddPlayNext -> "2"
-    AddToEnd -> "3"
-    AddReplaceAndPlay -> "4"
 
 data ServiceOption
   = AddTrackToLibrary SourceId MediaId -- 1

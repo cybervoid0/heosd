@@ -1,13 +1,10 @@
 module Heos.Command (
   Command (..),
   ServiceOption (..),
-  Credentials (..),
-  Range (..),
   QuickSelectId (..),
   InputName (..),
-  QueueMode (..),
+  Range (..),
   renderCommand,
-  RepeatMode (..),
 ) where
 
 import Heos.Command.Internal

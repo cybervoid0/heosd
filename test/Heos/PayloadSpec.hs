@@ -10,8 +10,7 @@ import Data.List (find)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Heos.Envelope (Envelope (..))
-import Heos.Media (ContainerId (..), Found (..), MediaId (..), MusicSource (..), Playable (..), SearchCriteriaId (..), SearchCriterion, SearchKind (..), SearchResult (..), SourceId (..), TrueFalse (..), YesNo (..), criterionFor, toFound)
-import Heos.Player (Network (..), NowPlaying (..), Player (..), PlayerId (..), QueueId (..))
+import Heos.Types
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -25,7 +24,7 @@ payloadOf file = do
 
 -- Decode a payload into the record under test; a parse failure fails the test
 -- with aeson's message, which names the missing or mistyped key.
-decodeAs :: FromJSON a => Value -> IO a
+decodeAs :: (FromJSON a) => Value -> IO a
 decodeAs = either fail pure . parseEither parseJSON
 
 -- The source with this name, or a failure naming what's missing.
@@ -59,9 +58,9 @@ spec = do
       tunein.available `shouldBe` TrueFalse False
       tunein.service_username `shouldBe` Nothing
 
-  describe "NowPlaying" $ do
+  describe "Track" $ do
     it "decodes a Tidal station from get_now_playing_media" $ do
-      np <- payloadOf "now_playing.json" >>= decodeAs @NowPlaying
+      np <- payloadOf "now_playing.json" >>= decodeAs @Track
       np._type `shouldBe` "station"
       np.song `shouldBe` "Lebanese Blonde"
       np.station `shouldBe` Just "Lebanese Blonde"
@@ -104,11 +103,11 @@ spec = do
   describe "criterionFor" $ do
     it "finds the scid of each kind in the Tidal criteria reply" $ do
       crits <- payloadOf "search_criteria.json" >>= decodeAs @[SearchCriterion]
-      map (`criterionFor` crits) [Artist, Album, Track, Playlist]
+      map (`criterionFor` crits) [ArtistKind, AlbumKind, TrackKind, PlaylistKind]
         `shouldBe` map (Just . SearchCriteriaId) [1, 2, 3, 6]
 
     it "finds nothing when the source offers no criteria" $
-      criterionFor Track [] `shouldBe` Nothing
+      criterionFor TrackKind [] `shouldBe` Nothing
 
   -- From what the device sent to what the scenario can play.
   describe "toFound" $ do

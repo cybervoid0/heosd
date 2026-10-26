@@ -11,7 +11,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Text.Encoding qualified as T
 import Heos.Command (Command (..))
-import Heos.Player (PlayerId (..))
+import Heos.Types
 import Data.Map.Strict qualified as Map
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
 import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), findBox, initialize, runConnection, sendCommand, subscribe)

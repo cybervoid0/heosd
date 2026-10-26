@@ -14,7 +14,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
 import GHC.Exception (displayException)
-import Heos.Command (Command (GetGroups, GetMusicSources, GetNowPlayingMedia, GetPlayState, GetPlayers, GetVolume, HeartBeat, RegisterForChangeEvents), renderCommand)
+import Heos.Command (Command (..), renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Connection.Parameters (ConnectionParams (..), defaultParams)
 import Heos.Envelope (
@@ -24,8 +24,8 @@ import Heos.Envelope (
   IncomingEnvelope (..),
   classifyEnvelope,
  )
-import Heos.Player (OnOff (..), PlayerId)
 import Heos.Time (toMicros)
+import Heos.Types
 import Heos.Url (decodeQuery, lookupParam)
 import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
 import Network.Socket.ByteString (recv, sendAll)

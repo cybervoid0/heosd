@@ -1,6 +1,6 @@
 module Heos.Handler.Live where
 
-import Control.Exception (Exception, throwIO)
+import Control.Exception (throwIO)
 import Control.Monad (void, (<=<))
 import Data.Aeson (FromJSON (parseJSON))
 import Data.Aeson.Types (parseEither)
@@ -10,15 +10,11 @@ import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Dispatch.Dynamic (interpret_)
 import Heos.Command (Command (..))
 import Heos.Connection (Connection, connectionParams, getPid, sendCommand)
-import Heos.Effect (Heos (..))
+import Heos.Effect (Heos (..), ProtocolError (..))
 import Heos.Envelope (Envelope (..), HeosHeader (..))
-import Heos.Media (Playable (..), criterionFor, toFound)
-import Heos.Player (parsePlayState)
+import Heos.Types
 import Heos.Url (decodeQuery, lookupParam)
 import Text.Read (readMaybe)
-
-newtype ProtocolError = ProtocolError Text deriving (Show)
-instance Exception ProtocolError
 
 runHeosLife :: (IOE :> es) => Connection -> Eff (Heos : es) a -> Eff es a
 runHeosLife conn = interpret_ $ \case

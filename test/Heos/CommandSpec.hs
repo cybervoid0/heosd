@@ -5,9 +5,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
 import Heos.Command
-import Heos.Media (ContainerId (..), MediaId (..), SearchCriteriaId (..), SourceId (..))
-import Heos.Player (GroupId (..), OnOff (..), PlayState (..), PlayerId (..), QueueId (..))
-import Heos.ToParam (ToParam (..))
+import Heos.ToParam (ToParam (toParam))
+import Heos.Types
 import Heos.Url.Internal (UrlResponse (..), decodeCommandUrl, lookupParam)
 import Test.Hspec
 import Test.QuickCheck (property)
