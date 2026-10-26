@@ -42,11 +42,7 @@ runHeosFake :: Eff (Heos : es) a -> Eff es a
 runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
   GetPlayersEff -> pure [defaultPlayer]
   GetSourcesEff -> pure dummySources
-  GetNowPlayingEff -> do
-    queue <- gets @FakeState (.queue)
-    when (null queue) $ throwIO (ProtocolError "queue is empty")
-    currTrack <- gets @FakeState (.currentTrack)
-    pure $ queue !! currTrack
+  GetNowPlayingEff -> getNowPlaying
   GetVolumeEff -> gets @FakeState (.volume)
   GetPlayStateEff -> gets @FakeState (.playState)
   SetPlayStateEff ps -> modify $ \s -> s{playState = ps}
@@ -65,6 +61,11 @@ runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
     let newTracks = tracksFor playable
         (newCurr, newQueue) = getNewQueue newTracks currTrack queue qm
     modify $ \s -> s{queue = newQueue, currentTrack = newCurr, playState = Play}
+  getNowPlaying = do
+    queue <- gets @FakeState (.queue)
+    when (null queue) $ throwIO (ProtocolError "queue is empty")
+    currTrack <- gets @FakeState (.currentTrack)
+    pure $ queue !! currTrack
 
 tracksFor :: Playable -> [Track]
 tracksFor = \case
