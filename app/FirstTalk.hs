@@ -18,7 +18,9 @@ firstTalk = withReconnect connParams $ \conn -> withAvr avrParams (getAddr conn)
   printChan <- subscribe conn
   volChan <- subscribe conn
   volumeRef <- newTVarIO (Nothing :: Maybe Int)
-  race_ (printer printChan `concurrently_` volumeTracker volChan volumeRef) (runEff . runHeosLive conn . runAvrLive avrConn . remote $ volumeRef)
+  let eff = runEff . runHeosLive conn . runAvrLive avrConn . remote $ volumeRef
+      trackers = printer printChan `concurrently_` volumeTracker volChan volumeRef
+  race_ trackers eff
 
 printer :: TChan HeosEvent -> IO Void
 printer ch = forever $ atomically (readTChan ch) >>= print
