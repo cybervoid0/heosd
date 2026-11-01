@@ -18,7 +18,7 @@ instance FromJSON Network where
     "wired" -> pure Wired
     other -> fail ("unknown network: " <> T.unpack other)
 
-data OnOff = On | Off deriving (Show, Eq)
+data OnOff = On | Off deriving (Show, Eq, Ord)
 instance ToParam OnOff where
   toParam status = case status of
     On -> "on"

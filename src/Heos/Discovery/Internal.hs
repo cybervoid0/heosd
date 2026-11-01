@@ -8,6 +8,7 @@ import Data.Maybe (mapMaybe)
 import GHC.Exception (displayException)
 import Network.Socket (
   Family (AF_INET),
+  HostAddress,
   SockAddr (SockAddrInet),
   Socket,
   SocketType (Datagram),
@@ -33,7 +34,7 @@ instance Exception DiscoveryError where
   displayException NoResponse = "No response"
   displayException (NoHeosDevice addr) = "Found non-Heos device: " <> show addr
 
-type DiscoveryResult = Either DiscoveryError (NonEmpty SockAddr)
+type DiscoveryResult = Either DiscoveryError (NonEmpty HostAddress)
 type Datagram = (BS.ByteString, SockAddr)
 
 -- | SSDP multicast group and port
@@ -64,7 +65,7 @@ mSearchData =
   bsShow val = BS.pack (show val)
 
 -- | Finds HEOS devices in the local network
-discover :: IO (Either DiscoveryError (NonEmpty SockAddr))
+discover :: IO (Either DiscoveryError (NonEmpty HostAddress))
 discover =
   either (Left . SocketFailure) filterDatagrams
     <$> try @IOException (bracket open close handleSocket)
@@ -81,8 +82,7 @@ filterDatagrams datagrams = case (mbResults, nonEmpty others) of
   (heos, others) = partition isHeos datagrams
   isHeos (msg, _) = heosDeviceType `BS.isInfixOf` msg
   mbResults = nonEmpty . mapMaybe go $ heos
-  heosPort = 1255
-  go (_, SockAddrInet _ ipV4Addr) = Just $ SockAddrInet heosPort ipV4Addr
+  go (_, SockAddrInet _ ipV4Addr) = Just ipV4Addr
   go _ = Nothing
 
 collect :: Socket -> IO [Datagram]

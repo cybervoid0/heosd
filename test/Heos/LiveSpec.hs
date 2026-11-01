@@ -12,18 +12,18 @@ import Data.ByteString.Char8 qualified as BC
 import Data.Maybe (fromMaybe)
 import Effectful (Eff, IOE, runEff)
 import Heos.Connection.Internal (ConnectionSockets (..), runConnection)
-import Heos.Connection.Parameters (ConnectionParams (..))
+import Heos.Connection.Parameters (ConnectionParams (..), reconnectionPolicy)
 import Heos.Effect
 import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, replyTo)
-import Heos.Handler.Live (runHeosLife)
+import Heos.Handler.Live (runHeosLive)
 import Heos.Time (Seconds (..))
 import Heos.Types
-import Network.Socket (Family (AF_UNIX), SocketType (Stream), close, socketPair)
+import Network.Socket (Family (AF_UNIX), SocketType (Stream), close, socketPair, tupleToHostAddress)
 import System.FilePath ((</>))
 import Test.Hspec
 
 params :: ConnectionParams
-params = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1, maxLineLength = 64 * 1024}
+params = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1, maxLineLength = 64 * 1024, port = 1255, retryPolicy = reconnectionPolicy}
 
 -- Run a program against the Live handler over a connection to a fake device
 -- that answers with `reply`. Returns the result and the commands the device
@@ -36,8 +36,8 @@ withLive reply prog =
       let record line = atomically (modifyTVar' seen (line :))
       withAsync (answering (const (pure ())) devEvents) $ \_ ->
         withAsync (answeringWith reply record devCommands) $ \_ -> do
-          result <- runConnection params (ConnectionSockets ourEvents ourCommands) $ \conn ->
-            runEff (runHeosLife conn prog)
+          result <- runConnection params (ConnectionSockets (tupleToHostAddress (127, 0, 0, 1)) ourEvents ourCommands) $ \conn ->
+            runEff (runHeosLive conn prog)
           commands <- reverse <$> readTVarIO seen
           pure (result, commands)
  where

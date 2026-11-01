@@ -6,13 +6,17 @@ module Heos.Connection (
   sendCommand,
   connectionParams,
   getPid,
+  getAddr,
   ConnectionParams (..),
+  withAvr,
 ) where
 
+import Heos.Connection.Avr
 import Heos.Connection.Framing (splitLines)
 import Heos.Connection.Internal (
   Connection,
   connectionParams,
+  getAddr,
   getPid,
   sendCommand,
   subscribe,

@@ -14,11 +14,11 @@ import Text.Read (readMaybe)
 
 -- Стенд
 firstTalk :: IO ()
-firstTalk = withReconnect $ \conn -> do
+firstTalk = withReconnect connParams $ \conn -> withAvr avrParams (getAddr conn) $ \avrConn -> do
   printChan <- subscribe conn
   volChan <- subscribe conn
   volumeRef <- newTVarIO (Nothing :: Maybe Int)
-  race_ (printer printChan `concurrently_` volumeTracker volChan volumeRef) (runEff $ runHeosLife conn (remote volumeRef))
+  race_ (printer printChan `concurrently_` volumeTracker volChan volumeRef) (runEff . runHeosLive conn . runAvrLive avrConn . remote $ volumeRef)
 
 printer :: TChan HeosEvent -> IO Void
 printer ch = forever $ atomically (readTChan ch) >>= print
@@ -33,7 +33,7 @@ volumeTracker ch volumeRef =
         atomically $ writeTVar volumeRef volume
       _ -> pure ()
 
-remote :: (Heos :> es, IOE :> es) => TVar (Maybe Int) -> Eff es ()
+remote :: (Heos :> es, IOE :> es, Avr :> es) => TVar (Maybe Int) -> Eff es ()
 remote volumeRef =
   liftIO getLine >>= \case
     "q" -> pure ()
@@ -41,13 +41,16 @@ remote volumeRef =
       volume <- liftIO $ readTVarIO volumeRef
       liftIO $ putStrLn (maybe "Volume: unknown" (("Volume: " <>) . show) volume)
       remote volumeRef
-    line -> fromMaybe (liftIO $ putStrLn "команды: + - > || >> << q v") (keyToCommand line) >> remote volumeRef
- where
-  keyToCommand = \case
-    "+" -> Just $ volumeUp 1
-    "-" -> Just $ volumeDown 1
-    ">" -> Just $ setPlayState Play
-    "||" -> Just $ setPlayState Pause
-    ">>" -> Just playNext
-    "<<" -> Just playPrevious
-    _ -> Nothing
+    line -> fromMaybe (liftIO $ putStrLn "команды: + - > || >> << q v on off") (lookup line keys) >> remote volumeRef
+
+keys :: (Heos :> es, Avr :> es) => [(String, Eff es ())]
+keys =
+  [ ("off", setPower Off)
+  , ("on", setPower On)
+  , ("+", volumeUp 1)
+  , ("-", volumeDown 1)
+  , (">", setPlayState Play)
+  , ("||", setPlayState Pause)
+  , (">>", playNext)
+  , ("<<", playPrevious)
+  ]

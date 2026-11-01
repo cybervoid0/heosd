@@ -90,6 +90,7 @@ library
                       Heos.Url.Internal
                       Heos.Envelope
                       Heos.Envelope.Internal
+                      Heos.Envelope.Avr
                       Heos.Config
                       Heos.Discovery
                       Heos.Discovery.Internal
@@ -98,15 +99,21 @@ library
                       Heos.Connection.Reconnect
                       Heos.Connection.Parameters
                       Heos.Connection.Framing
+                      Heos.Connection.Avr
                       Heos.Effect
+                      Heos.Effect.Internal
+                      Heos.Effect.Avr
                       Heos.Handler.Live
+                      Heos.Handler.AvrLive
                       Heos.Handler.Fake
+                      Heos.Handler.AvrFake
                       Heos.Handler.Fixtures
                       Heos.Service
                       Heos.Mcp
                       Heos.Http
                       Heos.Command
                       Heos.Command.Internal
+                      Heos.Command.Avr
                       Heos.ToParam
                       Heos.Time
                       Heos.Json
@@ -192,6 +199,7 @@ test-suite heosd-test
                       Heos.PayloadSpec
                       Heos.LiveSpec
                       Heos.FakeSpec
+                      Heos.AvrSpec
                       Heos.FakeDevice
 
     build-tool-depends: hspec-discover:hspec-discover

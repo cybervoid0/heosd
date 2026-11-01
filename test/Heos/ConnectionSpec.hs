@@ -15,12 +15,12 @@ import Heos.Types
 import Data.Map.Strict qualified as Map
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
 import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), findBox, initialize, runConnection, sendCommand, subscribe)
-import Heos.Connection.Parameters (ConnectionParams (..))
+import Heos.Connection.Parameters (ConnectionParams (..), reconnectionPolicy)
 import Heos.FakeDevice (answering, commandPath, commandQuery)
 import Heos.Time (Seconds (..))
 import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
-import Network.Socket (Family (AF_UNIX), Socket, SocketType (Stream), close, socketPair)
+import Network.Socket (Family (AF_UNIX), HostAddress, Socket, SocketType (Stream), close, socketPair, tupleToHostAddress)
 import Network.Socket.ByteString (recv, sendAll)
 import System.Timeout (timeout)
 import Test.Hspec
@@ -109,7 +109,12 @@ exchange conn theirs cmd inspect replies = do
 -- at once, short enough to fail a test rather than hang it. Heartbeats are
 -- an hour apart so they never interfere with the command under test.
 testParams :: ConnectionParams
-testParams = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1, maxLineLength = 64 * 1024}
+testParams = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1, maxLineLength = 64 * 1024, port = 1255, retryPolicy = reconnectionPolicy}
+
+-- Sockets here come from socketPair, so the address is never dialled;
+-- it only fills the field.
+loopback :: HostAddress
+loopback = tupleToHostAddress (127, 0, 0, 1)
 
 -- The device's ends of both lanes: the test reads here what the daemon
 -- sent and writes what the device would answer.
@@ -121,7 +126,7 @@ withLanes :: (ConnectionSockets -> Device -> IO a) -> IO a
 withLanes k =
   withSocketPair $ \(ourEvents, devEvents) ->
     withSocketPair $ \(ourCommands, devCommands) ->
-      k (ConnectionSockets ourEvents ourCommands) Device{devEvents, devCommands}
+      k (ConnectionSockets loopback ourEvents ourCommands) Device{devEvents, devCommands}
 
 -- Which lane a command arrived on, for tests that answer on both.
 data Lane = EventsLane | CommandsLane deriving (Show, Eq)
@@ -141,7 +146,7 @@ withAnsweringDevice dev k = do
 -- sockets, so what these tests establish for one lane holds for the other.
 runWith :: ConnectionParams -> Socket -> (Connection -> IO a) -> IO a
 runWith params ours act =
-  withSocketPair $ \(idle, _) -> runConnection params (ConnectionSockets idle ours) act
+  withSocketPair $ \(idle, _) -> runConnection params (ConnectionSockets loopback idle ours) act
 
 run :: Socket -> (Connection -> IO a) -> IO a
 run = runWith testParams

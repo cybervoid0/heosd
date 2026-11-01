@@ -16,7 +16,7 @@ import Data.Void (Void, absurd)
 import GHC.Exception (displayException)
 import Heos.Command (Command (..), renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
-import Heos.Connection.Parameters (ConnectionParams (..), defaultParams)
+import Heos.Connection.Parameters (ConnectionParams (..))
 import Heos.Envelope (
   Envelope (..),
   HeosEvent (..),
@@ -27,7 +27,7 @@ import Heos.Envelope (
 import Heos.Time (toMicros)
 import Heos.Types
 import Heos.Url (decodeQuery, lookupParam)
-import Network.Socket (Family (AF_INET), SockAddr, Socket, SocketType (Stream), close, connect, defaultProtocol, socket)
+import Network.Socket (Family (..), HostAddress, SockAddr (..), Socket, SocketType (..), close, connect, defaultProtocol, socket)
 import Network.Socket.ByteString (recv, sendAll)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
@@ -44,9 +44,13 @@ type EitherEnvelope = Either ConnectionError Envelope
 --   carries notifications, the other carries commands, so a burst of
 --   events never delays a reply.
 data ConnectionSockets = ConnectionSockets
-  { events :: Socket
+  { address :: HostAddress
+  , events :: Socket
   , commands :: Socket
   }
+
+getAddr :: Connection -> HostAddress
+getAddr conn = conn.sockets.address
 
 -- | Everything the two sockets share. The cells are created once per
 --   connection in 'runConnection'; both readers and every sender use them.
@@ -82,7 +86,7 @@ getPid params = params.playerId
 --   so a half-initialized connection never reaches the action.
 initialize :: Connection -> IO ()
 initialize conn = do
-  let (ConnectionSockets eSock cSock) = conn.sockets
+  let (ConnectionSockets _ eSock cSock) = conn.sockets
       props = conn.props
       playerId = props.params.playerId
       query = sendOn cSock props
@@ -111,11 +115,12 @@ withSocket addr act = bracket open close $ \s -> connect s addr >> act s
 -- | Open both sockets to the device, run the start-up sequence, then the
 --   action. Both sockets are closed when the action is done. Everything
 --   but the sockets is 'runConnection'.
-withConnection :: SockAddr -> (Connection -> IO a) -> IO a
-withConnection addr act =
-  withSocket addr $ \eSock ->
-    withSocket addr $ \cSock ->
-      runConnection defaultParams (ConnectionSockets eSock cSock) $ \conn -> initialize conn >> act conn
+withConnection :: ConnectionParams -> (Connection -> IO a) -> HostAddress -> IO a
+withConnection params act hostAddr =
+  let sockAddr = SockAddrInet params.port hostAddr
+   in withSocket sockAddr $ \eSock ->
+        withSocket sockAddr $ \cSock ->
+          runConnection params (ConnectionSockets hostAddr eSock cSock) $ \conn -> initialize conn >> act conn
 
 -- | Run them all; the first to end, or to fail, takes the rest down with it.
 together :: [IO Void] -> IO Void
@@ -128,7 +133,7 @@ together = runConcurrently . asum . map Concurrently
 --   action is cancelled and the error propagates. Takes sockets rather
 --   than an address so tests can pass their own.
 runConnection :: ConnectionParams -> ConnectionSockets -> (Connection -> IO a) -> IO a
-runConnection params sockets@(ConnectionSockets eSock cSock) act = do
+runConnection params sockets@(ConnectionSockets _ eSock cSock) act = do
   events <- newBroadcastTChanIO
   waiting <- newTVarIO Map.empty
   nextSeq <- newTVarIO @Int 0

@@ -16,8 +16,8 @@ import Heos.Types
 import Heos.Url (decodeQuery, lookupParam)
 import Text.Read (readMaybe)
 
-runHeosLife :: (IOE :> es) => Connection -> Eff (Heos : es) a -> Eff es a
-runHeosLife conn = interpret_ $ \case
+runHeosLive :: (IOE :> es) => Connection -> Eff (Heos : es) a -> Eff es a
+runHeosLive conn = interpret_ $ \case
   GetPlayersEff -> liftIO $ call GetPlayers >>= decodePayload
   GetSourcesEff -> liftIO $ call GetMusicSources >>= decodePayload
   GetNowPlayingEff -> liftIO $ call (GetNowPlayingMedia pid) >>= decodePayload
