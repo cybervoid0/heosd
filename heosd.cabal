@@ -200,6 +200,7 @@ test-suite heosd-test
                       Heos.LiveSpec
                       Heos.FakeSpec
                       Heos.AvrSpec
+                      Heos.AvrFakeSpec
                       Heos.FakeDevice
 
     build-tool-depends: hspec-discover:hspec-discover

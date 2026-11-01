@@ -76,7 +76,7 @@
 | `Heos.Effect` | фасад над обоими эффектами | своих нет |
 | `Heos.Handler.Live` | `Heos` поверх `Connection` | нет своих |
 | `Heos.Handler.AvrLive` | `Avr` поверх `AvrConnection` | нет своих |
-| `Heos.Handler.AvrFake` | `Avr` без сети | появится |
+| `Heos.Handler.AvrFake` | `Avr` без сети: одна ячейка с питанием | `FakeAvrState` |
 | `Heos.Handler.Fake` | эффект поверх заготовок | `FakeState` |
 | `Heos.Handler.Fixtures` | заготовки для подделки: очередь из записанного ответа | своих нет |
 | `Heos.Service` | сценарии: найти и поставить, статус | появятся |
