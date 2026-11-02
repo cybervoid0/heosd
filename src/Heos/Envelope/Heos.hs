@@ -1,4 +1,16 @@
-module Heos.Envelope.Internal where
+module Heos.Envelope.Heos (
+  -- * Raw envelope, as decoded from JSON
+  Envelope (..),
+  HeosHeader (..),
+  HeosResult (..),
+
+  -- * Classified envelope
+  IncomingEnvelope (..),
+  HeosOutcome (..),
+  HeosError (..),
+  HeosEvent (..),
+  classifyEnvelope,
+) where
 
 import Data.Aeson.Types (FromJSON (..), Options (..), Value, defaultOptions, genericParseJSON)
 import Data.Char (toLower)

@@ -4,7 +4,7 @@ import Control.Concurrent (MVar, newMVar, withMVar)
 import Control.Exception (Exception (displayException), throwIO)
 import Control.Monad.Catch (bracket, bracketOnError)
 import Data.ByteString.Char8 qualified as B
-import Heos.Command (AvrCommand (..), renderAvrCommand)
+import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Connection.Parameters (AvrParams (..))
 import Heos.Envelope.Avr (AvrResponse (..), decodeAvrLine)
 import Heos.Time (toMicros)

@@ -1,22 +1,4 @@
-module Heos.Effect.Internal (
-  getPlayers,
-  getSources,
-  getNowPlaying,
-  getVolume,
-  getPlayState,
-  setPlayState,
-  setVolume,
-  volumeUp,
-  volumeDown,
-  search,
-  enqueue,
-  playItem,
-  playAll,
-  playNext,
-  playPrevious,
-  Heos (..),
-  ProtocolError (..),
-) where
+module Heos.Effect.Heos where
 
 import Control.Exception (Exception)
 import Control.Monad (forM_)

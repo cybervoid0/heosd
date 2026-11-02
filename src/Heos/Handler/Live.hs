@@ -8,15 +8,15 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Dispatch.Dynamic (interpret_)
-import Heos.Command (Command (..))
-import Heos.Connection (Connection, connectionParams, getPid, sendCommand)
-import Heos.Effect (Heos (..), ProtocolError (..))
-import Heos.Envelope (Envelope (..), HeosHeader (..))
+import Heos.Command.Heos (Command (..))
+import Heos.Connection (HeosConnection, connectionParams, getPid, sendCommand)
+import Heos.Effect.Heos (Heos (..), ProtocolError (..))
+import Heos.Envelope.Heos (Envelope (..), HeosHeader (..))
 import Heos.Types
 import Heos.Url (decodeQuery, lookupParam)
 import Text.Read (readMaybe)
 
-runHeosLive :: (IOE :> es) => Connection -> Eff (Heos : es) a -> Eff es a
+runHeosLive :: (IOE :> es) => HeosConnection -> Eff (Heos : es) a -> Eff es a
 runHeosLive conn = interpret_ $ \case
   GetPlayersEff -> liftIO $ call GetPlayers >>= decodePayload
   GetSourcesEff -> liftIO $ call GetMusicSources >>= decodePayload

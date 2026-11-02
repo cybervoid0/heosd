@@ -1,7 +1,7 @@
 module Heos.Connection (
   splitLines,
   withReconnect,
-  Connection,
+  HeosConnection,
   subscribe,
   sendCommand,
   connectionParams,
@@ -13,8 +13,8 @@ module Heos.Connection (
 
 import Heos.Connection.Avr
 import Heos.Connection.Framing (splitLines)
-import Heos.Connection.Internal (
-  Connection,
+import Heos.Connection.Heos (
+  HeosConnection,
   connectionParams,
   getAddr,
   getPid,

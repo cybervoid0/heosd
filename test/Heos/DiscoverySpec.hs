@@ -3,7 +3,7 @@ module Heos.DiscoverySpec (spec) where
 import Data.ByteString.Char8 qualified as BS
 import Data.List.NonEmpty (NonEmpty (..), toList)
 import Data.Word (Word8)
-import Heos.Discovery.Internal
+import Heos.Discovery
 import Network.Socket (HostAddress, PortNumber, SockAddr (SockAddrInet), tupleToHostAddress)
 import Test.Hspec
 

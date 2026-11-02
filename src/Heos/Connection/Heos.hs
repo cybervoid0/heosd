@@ -1,4 +1,4 @@
-module Heos.Connection.Internal where
+module Heos.Connection.Heos where
 
 import Control.Concurrent (MVar, newMVar, threadDelay, withMVar)
 import Control.Concurrent.Async (Concurrently (..), race)
@@ -14,10 +14,10 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
 import GHC.Exception (displayException)
-import Heos.Command (Command (..), renderCommand)
+import Heos.Command.Heos (Command (..), renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Connection.Parameters (ConnectionParams (..))
-import Heos.Envelope (
+import Heos.Envelope.Heos (
   Envelope (..),
   HeosEvent (..),
   HeosHeader (..),
@@ -49,7 +49,7 @@ data ConnectionSockets = ConnectionSockets
   , commands :: Socket
   }
 
-getAddr :: Connection -> HostAddress
+getAddr :: HeosConnection -> HostAddress
 getAddr conn = conn.sockets.address
 
 -- | Everything the two sockets share. The cells are created once per
@@ -68,13 +68,13 @@ data ConnectionProps = ConnectionProps
 
 -- | A live link to one HEOS device: the sockets and what they share.
 --   Handed to the user's action; abstract outside this module.
-data Connection = Connection
+data HeosConnection = HeosConnection
   { sockets :: ConnectionSockets
   , props :: ConnectionProps
   }
 
 -- | The parameters this connection was opened with.
-connectionParams :: Connection -> ConnectionParams
+connectionParams :: HeosConnection -> ConnectionParams
 connectionParams conn = conn.props.params
 
 getPid :: ConnectionParams -> PlayerId
@@ -84,7 +84,7 @@ getPid params = params.playerId
 --   queries, events on. Subscription commands go over the events socket,
 --   queries over the commands socket. A command without a reply throws,
 --   so a half-initialized connection never reaches the action.
-initialize :: Connection -> IO ()
+initialize :: HeosConnection -> IO ()
 initialize conn = do
   let (ConnectionSockets _ eSock cSock) = conn.sockets
       props = conn.props
@@ -115,7 +115,7 @@ withSocket addr act = bracket open close $ \s -> connect s addr >> act s
 -- | Open both sockets to the device, run the start-up sequence, then the
 --   action. Both sockets are closed when the action is done. Everything
 --   but the sockets is 'runConnection'.
-withConnection :: ConnectionParams -> (Connection -> IO a) -> HostAddress -> IO a
+withConnection :: ConnectionParams -> (HeosConnection -> IO a) -> HostAddress -> IO a
 withConnection params act hostAddr =
   let sockAddr = SockAddrInet params.port hostAddr
    in withSocket sockAddr $ \eSock ->
@@ -132,14 +132,14 @@ together = runConcurrently . asum . map Concurrently
 --   done; if one of them dies first (the device closed a socket), the
 --   action is cancelled and the error propagates. Takes sockets rather
 --   than an address so tests can pass their own.
-runConnection :: ConnectionParams -> ConnectionSockets -> (Connection -> IO a) -> IO a
+runConnection :: ConnectionParams -> ConnectionSockets -> (HeosConnection -> IO a) -> IO a
 runConnection params sockets@(ConnectionSockets _ eSock cSock) act = do
   events <- newBroadcastTChanIO
   waiting <- newTVarIO Map.empty
   nextSeq <- newTVarIO @Int 0
   sendLock <- newMVar ()
   let props = ConnectionProps{events, waiting, nextSeq, sendLock, params}
-      conn = Connection{sockets, props}
+      conn = HeosConnection{sockets, props}
   -- endless threads run concurrently
   let bg =
         together
@@ -213,7 +213,7 @@ findBox mbSeqTxt boxes = case seqNo of
 --   only from a thread that keeps reading for as long as it holds the
 --   channel; a copy that is dropped costs nothing, a copy that is kept but
 --   not read grows with every event.
-subscribe :: Connection -> IO (TChan HeosEvent)
+subscribe :: HeosConnection -> IO (TChan HeosEvent)
 subscribe conn = atomically $ dupTChan conn.props.events
 
 -- | Send a command over the given socket and wait for its reply; throws
@@ -245,7 +245,7 @@ sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
 
 -- | 'sendOn' over the commands socket, for callers outside this module:
 --   a connection error comes back as a value, not as an exception.
-sendCommand :: Connection -> Command -> IO EitherEnvelope
+sendCommand :: HeosConnection -> Command -> IO EitherEnvelope
 sendCommand conn cmd = try @ConnectionError $ sendOn conn.sockets.commands conn.props cmd
 
 -- | Keep one socket alive: a heart_beat every 'heartbeatDelay'. The device

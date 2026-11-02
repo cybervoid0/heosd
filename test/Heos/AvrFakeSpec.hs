@@ -1,7 +1,8 @@
 module Heos.AvrFakeSpec (spec) where
 
 import Effectful (runPureEff)
-import Heos.Effect (getPlayState, getPower, setPlayState, setPower)
+import Heos.Effect.Avr (getPower, setPower)
+import Heos.Effect.Heos (getPlayState, setPlayState)
 import Heos.Handler.AvrFake (runAvrFake)
 import Heos.Handler.Fake (runHeosFake)
 import Heos.Types (OnOff (..), PlayState (..))

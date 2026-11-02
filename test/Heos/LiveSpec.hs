@@ -11,9 +11,9 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Maybe (fromMaybe)
 import Effectful (Eff, IOE, runEff)
-import Heos.Connection.Internal (ConnectionSockets (..), runConnection)
+import Heos.Connection.Heos (ConnectionSockets (..), runConnection)
 import Heos.Connection.Parameters (ConnectionParams (..), reconnectionPolicy)
-import Heos.Effect
+import Heos.Effect.Heos
 import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, replyTo)
 import Heos.Handler.Live (runHeosLive)
 import Heos.Time (Seconds (..))

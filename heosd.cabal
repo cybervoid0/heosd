@@ -87,21 +87,20 @@ library
     -- Modules exported by the library.
     exposed-modules:  Heos
                       Heos.Url
-                      Heos.Url.Internal
-                      Heos.Envelope
-                      Heos.Envelope.Internal
+                      Heos.Envelope.Heos
                       Heos.Envelope.Avr
                       Heos.Config
+                      Heos.Device
+                      Heos.Device.Parameters
+                      Heos.Device.State
                       Heos.Discovery
-                      Heos.Discovery.Internal
                       Heos.Connection
-                      Heos.Connection.Internal
+                      Heos.Connection.Heos
                       Heos.Connection.Reconnect
                       Heos.Connection.Parameters
                       Heos.Connection.Framing
                       Heos.Connection.Avr
-                      Heos.Effect
-                      Heos.Effect.Internal
+                      Heos.Effect.Heos
                       Heos.Effect.Avr
                       Heos.Handler.Live
                       Heos.Handler.AvrLive
@@ -111,8 +110,7 @@ library
                       Heos.Service
                       Heos.Mcp
                       Heos.Http
-                      Heos.Command
-                      Heos.Command.Internal
+                      Heos.Command.Heos
                       Heos.Command.Avr
                       Heos.ToParam
                       Heos.Time

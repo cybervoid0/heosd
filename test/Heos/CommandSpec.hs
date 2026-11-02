@@ -4,10 +4,10 @@ import Control.Monad (forM_)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
-import Heos.Command
+import Heos.Command.Heos
 import Heos.ToParam (ToParam (toParam))
 import Heos.Types
-import Heos.Url.Internal (UrlResponse (..), decodeCommandUrl, lookupParam)
+import Heos.Url (UrlResponse (..), decodeCommandUrl, lookupParam)
 import Test.Hspec
 import Test.QuickCheck (property)
 

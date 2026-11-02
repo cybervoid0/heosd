@@ -9,7 +9,7 @@ import Effectful (Eff)
 import Effectful.Dispatch.Dynamic (reinterpret_)
 import Effectful.Exception (throwIO)
 import Effectful.State.Static.Local (evalState, gets, modify)
-import Heos.Effect (Heos (..), ProtocolError (ProtocolError))
+import Heos.Effect.Heos (Heos (..), ProtocolError (ProtocolError))
 import Heos.Handler.Fixtures (defaultPlayer, dummyQueue, dummySources)
 import Heos.Types
 

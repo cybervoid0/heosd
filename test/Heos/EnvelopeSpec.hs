@@ -5,7 +5,7 @@ import Data.Aeson (eitherDecode, eitherDecodeFileStrict)
 import Data.Either (isLeft, isRight)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Heos.Envelope
+import Heos.Envelope.Heos
 import Heos.Url (UrlParam (..), decodeQuery, lookupParam, makePair)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))

@@ -10,15 +10,15 @@ import Data.Maybe (isNothing)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Text.Encoding qualified as T
-import Heos.Command (Command (..))
+import Heos.Command.Heos (Command (..))
 import Heos.Types
 import Data.Map.Strict qualified as Map
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
-import Heos.Connection.Internal (Connection (..), ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), findBox, initialize, runConnection, sendCommand, subscribe)
+import Heos.Connection.Heos (HeosConnection (..), ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), findBox, initialize, runConnection, sendCommand, subscribe)
 import Heos.Connection.Parameters (ConnectionParams (..), reconnectionPolicy)
 import Heos.FakeDevice (answering, commandPath, commandQuery)
 import Heos.Time (Seconds (..))
-import Heos.Envelope (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
+import Heos.Envelope.Heos (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
 import Network.Socket (Family (AF_UNIX), HostAddress, Socket, SocketType (Stream), close, socketPair, tupleToHostAddress)
 import Network.Socket.ByteString (recv, sendAll)
@@ -97,7 +97,7 @@ failedLine =
 -- wait for the command line, hand it to the check, then write the replies.
 -- Returns the reply sendCommand came back with. Bounded, so a lost reply
 -- fails the test instead of hanging it.
-exchange :: Connection -> Socket -> Command -> (ByteString -> IO ()) -> [ByteString] -> IO Envelope
+exchange :: HeosConnection -> Socket -> Command -> (ByteString -> IO ()) -> [ByteString] -> IO Envelope
 exchange conn theirs cmd inspect replies = do
   (reply, ()) <-
     concurrently
@@ -144,11 +144,11 @@ withAnsweringDevice dev k = do
 -- Most tests exercise one lane: `ours` becomes the commands socket and the
 -- events lane stays idle (open, silent). The same reader serves both
 -- sockets, so what these tests establish for one lane holds for the other.
-runWith :: ConnectionParams -> Socket -> (Connection -> IO a) -> IO a
+runWith :: ConnectionParams -> Socket -> (HeosConnection -> IO a) -> IO a
 runWith params ours act =
   withSocketPair $ \(idle, _) -> runConnection params (ConnectionSockets loopback idle ours) act
 
-run :: Socket -> (Connection -> IO a) -> IO a
+run :: Socket -> (HeosConnection -> IO a) -> IO a
 run = runWith testParams
 
 -- The tests here expect the device to answer; a Left is a failure.
@@ -156,7 +156,7 @@ unwrap :: Either ConnectionError Envelope -> IO Envelope
 unwrap = either (\e -> fail ("sendCommand failed: " <> show e)) pure
 
 -- How many commands are in flight right now.
-inFlight :: Connection -> IO Int
+inFlight :: HeosConnection -> IO Int
 inFlight conn = Map.size <$> readTVarIO conn.props.waiting
 
 spec :: Spec
@@ -228,7 +228,7 @@ spec = do
     -- reader's buffer forever. Past maxLineLength the link counts as broken.
     it "ends with LineTooLong when the device sends more than maxLineLength without a line end" $
       withSocketPair $ \(ours, theirs) -> do
-        let stuck = runWith testParams{maxLineLength = 1000} ours $ \(_ :: Connection) -> do
+        let stuck = runWith testParams{maxLineLength = 1000} ours $ \(_ :: HeosConnection) -> do
               sendAll theirs (BC.replicate 5000 'x')
               forever (threadDelay 100000)
         timeout 2000000 stuck `shouldThrow` (== LineTooLong)
@@ -248,7 +248,7 @@ spec = do
     -- withReconnect (stage 23) can tell a dropped link from any other error.
     it "fails with ConnectionLost, and stops the action, when the device closes the connection" $
       withSocketPair $ \(ours, theirs) -> do
-        let stuck = run ours $ \(_ :: Connection) -> do
+        let stuck = run ours $ \(_ :: HeosConnection) -> do
               close theirs
               forever (threadDelay 100000)
         timeout 2000000 stuck `shouldThrow` (== ConnectionLost)

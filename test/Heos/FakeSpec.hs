@@ -7,7 +7,7 @@ import Control.Monad (replicateM_)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Effectful (Eff, runPureEff, (:>))
-import Heos.Effect
+import Heos.Effect.Heos
 import Heos.Handler.Fake (runHeosFake)
 import Heos.Types
 import Test.Hspec

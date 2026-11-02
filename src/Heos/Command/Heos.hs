@@ -1,11 +1,11 @@
-module Heos.Command.Internal where
+module Heos.Command.Heos where
 
 import Data.ByteString (ByteString)
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Heos.ToParam (ToParam (..), (.=), (.=?))
 import Heos.Types (ContainerId, Credentials (..), GroupId, MediaId, OnOff, PlayState, PlayerId, QueueId, QueueMode, RepeatMode, SearchCriteriaId, SourceId)
-import Heos.Url (UrlPair, renderCommandUrl)
+import Heos.Url (UrlPair(..), renderCommandUrl)
 
 -- Two parameters, not one value, so no ToParam: see AccountSignIn in commandParts.
 

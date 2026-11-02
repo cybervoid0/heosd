@@ -4,7 +4,7 @@ import Control.Exception (Exception (displayException), IOException, throwIO)
 import Control.Monad.Catch (Handler (..))
 import Control.Retry (recovering)
 import Data.List.NonEmpty qualified as NE
-import Heos.Connection.Internal (Connection, ConnectionError, withConnection)
+import Heos.Connection.Heos (ConnectionError, HeosConnection, withConnection)
 import Heos.Connection.Parameters (ConnectionParams (..))
 import Heos.Discovery (DiscoveryError, discover)
 import Network.Socket (HostAddress)
@@ -13,12 +13,12 @@ import Network.Socket (HostAddress)
 --   search fails or the connection drops, wait and start over, search
 --   included; the action runs again on every new connection. Returns when
 --   the action returns.
-withReconnect :: ConnectionParams -> (Connection -> IO a) -> IO a
+withReconnect :: ConnectionParams -> (HeosConnection -> IO a) -> IO a
 withReconnect params = reconnecting params findAddr
  where
   findAddr = discover >>= either throwIO (pure . NE.head)
 
-reconnecting :: ConnectionParams -> IO HostAddress -> (Connection -> IO a) -> IO a
+reconnecting :: ConnectionParams -> IO HostAddress -> (HeosConnection -> IO a) -> IO a
 reconnecting params findAddr act = recovering params.retryPolicy handlers $ \_ -> findAddr >>= withConnection params act
  where
   handlers =

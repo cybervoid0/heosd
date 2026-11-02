@@ -6,7 +6,7 @@ module Heos.UrlSpec (spec) where
 import Data.Either (isLeft, isRight)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Heos.Url.Internal
+import Heos.Url
 import Test.Hspec
 import Test.QuickCheck
 

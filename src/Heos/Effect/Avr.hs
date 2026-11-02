@@ -1,8 +1,4 @@
-module Heos.Effect.Avr (
-  Avr (..),
-  getPower,
-  setPower,
-) where
+module Heos.Effect.Avr where
 
 import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, (:>))
 import Effectful.Dispatch.Dynamic (send)
