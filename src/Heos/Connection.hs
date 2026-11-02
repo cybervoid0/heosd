@@ -1,5 +1,4 @@
 module Heos.Connection (
-  splitLines,
   withReconnect,
   HeosConnection,
   subscribe,
@@ -12,7 +11,7 @@ module Heos.Connection (
 ) where
 
 import Heos.Connection.Avr
-import Heos.Connection.Framing (splitLines)
+
 import Heos.Connection.Heos (
   HeosConnection,
   connectionParams,

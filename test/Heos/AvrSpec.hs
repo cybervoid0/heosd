@@ -62,10 +62,10 @@ type Script = TVar [ByteString] -> Socket -> IO ()
 replyingWith :: (ByteString -> IO ByteString) -> Script
 replyingWith reply seen sock = go ""
  where
-  go pending = do
+  go rest = do
     chunk <- recv sock 1024
     unless (BS.null chunk) $ do
-      let pieces = BC.split '\r' (pending <> chunk)
+      let pieces = BC.split '\r' (rest <> chunk)
       forM_ (init pieces) $ \line -> do
         atomically $ modifyTVar' seen (line :)
         answer <- reply line
@@ -80,23 +80,23 @@ replying reply = replyingWith (pure . reply)
 -- question is always answered with `pw`.
 poweredAmp :: OnOff -> ByteString -> ByteString
 poweredAmp pw = \case
-  "PW?" -> status pw
-  "PWON" -> status On
-  "PWSTANDBY" -> status Off
+  "PW?" -> statusLine pw
+  "PWON" -> statusLine On
+  "PWSTANDBY" -> statusLine Off
   _ -> ""
 
-status :: OnOff -> ByteString
-status On = "PWON\r"
-status Off = "PWSTANDBY\r"
+statusLine :: OnOff -> ByteString
+statusLine On = "PWON\r"
+statusLine Off = "PWSTANDBY\r"
 
 -- The same amplifier, but it remembers the state it was switched to.
 statefulAmp :: OnOff -> IO (ByteString -> IO ByteString)
 statefulAmp initial = do
   power <- newTVarIO initial
   pure $ \case
-    "PW?" -> status <$> readTVarIO power
-    "PWON" -> status On <$ atomically (writeTVar power On)
-    "PWSTANDBY" -> status Off <$ atomically (writeTVar power Off)
+    "PW?" -> statusLine <$> readTVarIO power
+    "PWON" -> statusLine On <$ atomically (writeTVar power On)
+    "PWSTANDBY" -> statusLine Off <$ atomically (writeTVar power Off)
     _ -> pure ""
 
 -- An amplifier on the loopback interface, port picked by the OS. Runs the
