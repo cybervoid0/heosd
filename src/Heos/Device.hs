@@ -36,8 +36,7 @@ withDevice params act = withReconnect params.heos $ \conn ->
 
 -- | The start-up sequence the vendor prescribes: events off, the state
 --   queries, events on. Subscription commands go over the events socket,
---   queries over the commands socket. A command without a reply throws,
---   so a half-initialized connection never reaches the action.
+--   queries over the commands socket.
 initialize :: HeosConnection -> IO (Catalogue, LiveState)
 initialize conn = do
   let (ConnectionSockets _ eSock cSock) = conn.sockets
@@ -46,8 +45,8 @@ initialize conn = do
   _ <- subscribeCmd (RegisterForChangeEvents Off)
   -- TODO: поставить сюда signIn
   -- То что в сети есть хотя бы один плеер, было проверено в `readPid` в `Heos.Connection.Heos`
-  players <- query GetPlayers >>= decodePayload @[Player]
-  sources <- query GetMusicSources >>= decodePayload @[MusicSource]
+  players <- query GetPlayers >>= decodePayload
+  sources <- query GetMusicSources >>= decodePayload
   criteria <-
     Map.fromList
       <$> forM
@@ -59,8 +58,8 @@ initialize conn = do
   let catalogue = Catalogue{sources, players, criteria}
       pid = conn.pid
 
-  nowPlaying <- query (GetNowPlayingMedia pid) >>= decodePayload @(Maybe Track)
-  volume <- query (GetVolume pid) >>= fromMessage "level" (readMaybe @Int . T.unpack)
+  nowPlaying <- query (GetNowPlayingMedia pid) >>= decodePayload
+  volume <- query (GetVolume pid) >>= fromMessage "level" (readMaybe . T.unpack)
   playState <- query (GetPlayState pid) >>= fromMessage "state" parsePlayState
 
   let liveState = LiveState{nowPlaying, volume, playState}

@@ -1,10 +1,34 @@
 module Heos.Connection.Heos where
 
-import Control.Concurrent
-import Control.Concurrent.Async
-import Control.Concurrent.STM
-import Control.Exception
-import Control.Monad
+import Control.Concurrent (newMVar, threadDelay, withMVar)
+import Control.Concurrent.Async (
+  Concurrently (Concurrently, runConcurrently),
+  race,
+ )
+import Control.Concurrent.STM (
+  TChan,
+  atomically,
+  dupTChan,
+  modifyTVar',
+  newBroadcastTChanIO,
+  newEmptyTMVarIO,
+  newTVarIO,
+  readTVar,
+  takeTMVar,
+  tryPutTMVar,
+  writeTChan,
+  writeTVar,
+ )
+import Control.Exception (
+  IOException,
+  bracket,
+  bracket_,
+  finally,
+  handle,
+  throwIO,
+  try,
+ )
+import Control.Monad (forM_, forever, unless, when)
 import Data.Aeson (eitherDecodeStrict)
 import Data.ByteString qualified as BS
 import Data.Foldable (asum)
@@ -16,7 +40,13 @@ import Data.Text qualified as T
 import Data.Void (Void, absurd)
 import Heos.Command.Heos (Command (..), renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
-import Heos.Connection.Types
+import Heos.Connection.Types (
+  ConnectionError (..),
+  ConnectionProps (..),
+  ConnectionSockets (ConnectionSockets, commands),
+  EitherEnvelope,
+  HeosConnection (..),
+ )
 import Heos.Envelope.Heos (
   Envelope (..),
   HeosEvent (..),
@@ -35,7 +65,7 @@ import Text.Read (readMaybe)
 
 readPid :: Socket -> ConnectionProps -> IO PlayerId
 readPid connSock props = do
-  players <- sendOn connSock props GetPlayers >>= decodePayload @[Player]
+  players :: [Player] <- sendOn connSock props GetPlayers >>= decodePayload
   player <- maybe (throwIO PlayerNotFound) pure (listToMaybe players)
   pure player.pid
 

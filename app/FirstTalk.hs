@@ -14,11 +14,11 @@ import Text.Read (readMaybe)
 
 -- Стенд
 firstTalk :: IO ()
-firstTalk = withDevice defaultParams $ \(Device heosConn avrConn _ _) -> do
-  printChan <- subscribe heosConn
-  volChan <- subscribe heosConn
+firstTalk = withDevice defaultParams $ \dev -> do
+  printChan <- subscribe dev.heos
+  volChan <- subscribe dev.heos
   volumeRef <- newTVarIO (Nothing :: Maybe Int)
-  let eff = runEff . runHeosLive heosConn . runAvrLive avrConn . remote $ volumeRef
+  let eff = runEff . runHeosLive dev.heos . runAvrLive dev.avr . remote $ volumeRef
       trackers = printer printChan `concurrently_` volumeTracker volChan volumeRef
   race_ trackers eff
 
