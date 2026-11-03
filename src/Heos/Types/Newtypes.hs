@@ -40,7 +40,7 @@ instance ToParam SearchCriteriaId where
   toParam (SearchCriteriaId scid) = toParam scid
 
 newtype SourceId = SourceId Int
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
   deriving newtype (FromJSON)
 instance ToParam SourceId where
   toParam (SourceId sid) = toParam sid

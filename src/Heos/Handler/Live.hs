@@ -2,18 +2,14 @@ module Heos.Handler.Live where
 
 import Control.Exception (throwIO)
 import Control.Monad (void, (<=<))
-import Data.Aeson (FromJSON (parseJSON))
-import Data.Aeson.Types (parseEither)
-import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Dispatch.Dynamic (interpret_)
 import Heos.Command.Heos (Command (..))
-import Heos.Connection (HeosConnection, connectionParams, getPid, sendCommand)
-import Heos.Effect.Heos (Heos (..), ProtocolError (..))
-import Heos.Envelope.Heos (Envelope (..), HeosHeader (..))
+import Heos.Connection (HeosConnection (..), sendCommand)
+import Heos.Effect.Heos (Heos (..))
+import Heos.Envelope.Heos (decodePayload, fromMessage)
 import Heos.Types
-import Heos.Url (decodeQuery, lookupParam)
 import Text.Read (readMaybe)
 
 runHeosLive :: (IOE :> es) => HeosConnection -> Eff (Heos : es) a -> Eff es a
@@ -38,19 +34,7 @@ runHeosLive conn = interpret_ $ \case
   PlayNextTrackEff -> liftIO $ vCall (PlayNext pid)
   PlayPrevTrackEff -> liftIO $ vCall (PlayPrevious pid)
  where
-  pid = getPid . connectionParams $ conn
+  pid = conn.pid
   call = either throwIO pure <=< sendCommand conn
   vCall = void . call
   orProtocol msg = maybe (throwIO (ProtocolError msg)) pure
-
--- the payload of a reply, decoded into whatever the operation returns
-decodePayload :: (FromJSON a) => Envelope -> IO a
-decodePayload env = case env.payload of
-  Nothing -> throwIO (ProtocolError "reply without payload")
-  Just v -> either (throwIO . ProtocolError . T.pack) pure (parseEither parseJSON v)
-
--- a value from the reply's message: "pid=…&key=15" -> 15
-fromMessage :: Text -> (Text -> Maybe a) -> Envelope -> IO a
-fromMessage key parse env =
-  maybe (throwIO (ProtocolError ("no " <> key <> " in " <> T.pack (show env.heos.message)))) pure $
-    env.heos.message >>= lookupParam key . decodeQuery >>= parse

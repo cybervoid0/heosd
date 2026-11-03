@@ -5,9 +5,9 @@ import Control.Exception (Exception (displayException), throwIO)
 import Control.Monad.Catch (bracket, bracketOnError)
 import Data.ByteString.Char8 qualified as B
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
-import Heos.Connection.Parameters (AvrParams (..))
 import Heos.Envelope.Avr (AvrResponse (..), decodeAvrLine)
 import Heos.Time (toMicros)
+import Heos.Types
 import Network.Socket (Family (AF_INET), HostAddress, SockAddr (..), SocketType (Stream), socketToHandle)
 import Network.Socket qualified as S
 import System.IO (Handle, IOMode (ReadWriteMode), hClose, hFlush, hGetChar, hSetBinaryMode)
@@ -19,10 +19,10 @@ instance Exception AvrConnectionError where
 
 data AvrConnection = AvrConnection
   { lock :: MVar Handle
-  , params :: AvrParams
+  , params :: AvrConnectionParams
   }
 
-withAvr :: AvrParams -> HostAddress -> (AvrConnection -> IO a) -> IO a
+withAvr :: AvrConnectionParams -> HostAddress -> (AvrConnection -> IO a) -> IO a
 withAvr params addr act = bracket open hClose $ \handle -> do
   hBox <- newMVar handle
   act (AvrConnection hBox params)

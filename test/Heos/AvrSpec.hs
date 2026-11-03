@@ -11,12 +11,11 @@ import Data.Either (isLeft)
 import Effectful (runEff)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Connection.Avr (AvrConnection, AvrConnectionError (..), answerOf, sendAvrCommand, withAvr)
-import Heos.Connection.Parameters (AvrParams (..))
 import Heos.Effect.Avr (getPower, setPower)
 import Heos.Envelope.Avr (decodeAvrLine)
 import Heos.Handler.AvrLive (runAvrLive)
 import Heos.Time (Seconds (..))
-import Heos.Types (OnOff (..))
+import Heos.Types (AvrConnectionParams (..), OnOff (..))
 import Network.Socket (
   Family (AF_INET),
   HostAddress,
@@ -50,8 +49,8 @@ loopback = tupleToHostAddress (127, 0, 0, 1)
 
 -- Short enough to fail a test rather than hang it; the device answers at
 -- once when it answers at all.
-paramsFor :: PortNumber -> AvrParams
-paramsFor port = AvrParams{port, requestTimeout = Seconds 0.2}
+paramsFor :: PortNumber -> AvrConnectionParams
+paramsFor port = AvrConnectionParams{port, requestTimeout = Seconds 0.2}
 
 -- What the amplifier does with its end of the socket once the daemon has
 -- connected. Gets the log to record what the daemon sent.

@@ -92,14 +92,13 @@ library
                       Heos.Config
                       Heos.Device
                       Heos.Device.Parameters
-                      Heos.Device.State
                       Heos.Discovery
                       Heos.Connection
                       Heos.Connection.Heos
                       Heos.Connection.Reconnect
-                      Heos.Connection.Parameters
                       Heos.Connection.Framing
                       Heos.Connection.Avr
+                      Heos.Connection.Types
                       Heos.Effect.Heos
                       Heos.Effect.Avr
                       Heos.Handler.Live
@@ -117,6 +116,7 @@ library
                       Heos.Json
                       Heos.Types
                       Heos.Types.Records
+                      Heos.Types.Errors
                       Heos.Types.Enums
                       Heos.Types.Newtypes
 
@@ -194,6 +194,7 @@ test-suite heosd-test
                       Heos.DiscoverySpec
                       Heos.ConnectionSpec
                       Heos.ReconnectSpec
+                      Heos.DeviceSpec
                       Heos.PayloadSpec
                       Heos.LiveSpec
                       Heos.FakeSpec

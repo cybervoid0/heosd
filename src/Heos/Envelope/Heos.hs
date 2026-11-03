@@ -10,14 +10,18 @@ module Heos.Envelope.Heos (
   HeosError (..),
   HeosEvent (..),
   classifyEnvelope,
+  decodePayload,
+  fromMessage,
 ) where
 
-import Data.Aeson.Types (FromJSON (..), Options (..), Value, defaultOptions, genericParseJSON)
+import Control.Exception (throwIO)
+import Data.Aeson.Types (FromJSON (..), Options (..), Value, defaultOptions, genericParseJSON, parseEither)
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
+import Heos.Types
 import Heos.Url (UrlParam (UrlFlag), decodeQuery, lookupParam)
 import Text.Read (readMaybe)
 
@@ -86,3 +90,15 @@ classifyEnvelope env
   outcome = case env.heos.result of
     Just Fail -> Failed $ findError msg
     _ -> Succeeded
+
+-- the payload of a reply, decoded into whatever the operation returns
+decodePayload :: (FromJSON a) => Envelope -> IO a
+decodePayload env = case env.payload of
+  Nothing -> throwIO (ProtocolError "reply without payload")
+  Just v -> either (throwIO . ProtocolError . T.pack) pure (parseEither parseJSON v)
+
+-- a value from the reply's message: "pid=…&key=15" -> 15
+fromMessage :: Text -> (Text -> Maybe a) -> Envelope -> IO a
+fromMessage key parse env =
+  maybe (throwIO (ProtocolError ("no " <> key <> " in " <> T.pack (show env.heos.message)))) pure $
+    env.heos.message >>= lookupParam key . decodeQuery >>= parse

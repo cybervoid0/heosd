@@ -1,3 +1,28 @@
 module Heos.Device.Parameters where
 
-data DeviceParams = DeviceParams {}
+import Control.Retry (capDelay, exponentialBackoff)
+import Heos.Time (Seconds (..), toMicros)
+import Heos.Types
+
+data DeviceParams = DeviceParams
+  { heos :: HeosConnectionParams
+  , avr :: AvrConnectionParams
+  }
+
+defaultParams :: DeviceParams
+defaultParams =
+  DeviceParams
+    { heos =
+        HeosConnectionParams
+          { commandTimeout = Seconds 5
+          , heartbeatDelay = Seconds 30
+          , maxLineLength = 1024 * 1024
+          , port = 1255
+          , retryPolicy = (capDelay . toMicros) (Seconds 60) $ (exponentialBackoff . toMicros) (Seconds 1)
+          }
+    , avr =
+        AvrConnectionParams
+          { port = 23
+          , requestTimeout = Seconds 1
+          }
+    }

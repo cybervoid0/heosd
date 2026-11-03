@@ -1,12 +1,27 @@
 module Heos.Types.Records where
 
+import Control.Retry (RetryPolicyM)
 import Data.Aeson (FromJSON (parseJSON), genericParseJSON)
 import Data.List (find)
+import Data.Map.Strict (Map)
 import Data.Text (Text)
 import GHC.Generics (Generic)
 import Heos.Json (heosJson)
-import Heos.Types.Enums (Network, Playable (..), SearchKind (..))
+import Heos.Time (Seconds)
+import Heos.Types.Enums (Network, PlayState, Playable (..), SearchKind (..))
 import Heos.Types.Newtypes (ContainerId (..), MediaId, PlayerId, QueueId, SearchCriteriaId, SourceId, TrueFalse, YesNo (..))
+import Network.Socket (PortNumber)
+
+data AvrConnectionParams = AvrConnectionParams
+  { port :: PortNumber
+  , requestTimeout :: Seconds
+  }
+
+data Catalogue = Catalogue
+  { players :: [Player]
+  , sources :: [MusicSource]
+  , criteria :: Map SourceId [SearchCriterion]
+  }
 
 data Found = Found
   { name :: Text
@@ -26,6 +41,23 @@ toFound sid query r@(SearchResult{name, artist, album, _type}) = Found{name, art
     (_, YesNo False, _, Just mid) -> Just (PlayTrack sid searchedTracks mid)
     _ -> Nothing -- не хватает идентификатора
   searchedTracks = ContainerId ("SEARCHED_TRACKS-" <> query)
+
+data HeosConnectionParams = HeosConnectionParams
+  { commandTimeout :: Seconds
+  -- ^ how long a command may wait for its reply
+  , heartbeatDelay :: Seconds
+  -- ^ pause between heartbeats on each socket
+  , maxLineLength :: Int
+  -- ^ how many bytes the device may send without a "\r\n" before the link
+  , port :: PortNumber
+  , retryPolicy :: RetryPolicyM IO
+  }
+
+data LiveState = LiveState
+  { nowPlaying :: Maybe Track
+  , volume :: Int
+  , playState :: PlayState
+  }
 
 data MusicSource = MusicSource
   { name :: Text

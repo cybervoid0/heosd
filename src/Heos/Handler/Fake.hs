@@ -9,9 +9,19 @@ import Effectful (Eff)
 import Effectful.Dispatch.Dynamic (reinterpret_)
 import Effectful.Exception (throwIO)
 import Effectful.State.Static.Local (evalState, gets, modify)
-import Heos.Effect.Heos (Heos (..), ProtocolError (ProtocolError))
+import Heos.Effect.Heos (Heos (..))
 import Heos.Handler.Fixtures (defaultPlayer, dummyQueue, dummySources)
-import Heos.Types
+import Heos.Types (
+  ContainerId (..),
+  Found (..),
+  PlayState (..),
+  Playable (..),
+  ProtocolError (..),
+  QueueMode (..),
+  SearchKind (..),
+  SourceId,
+  Track (..),
+ )
 
 {- handler backed by recorded responses -}
 {-

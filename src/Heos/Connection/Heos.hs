@@ -1,28 +1,29 @@
 module Heos.Connection.Heos where
 
-import Control.Concurrent (MVar, newMVar, threadDelay, withMVar)
-import Control.Concurrent.Async (Concurrently (..), race)
-import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newEmptyTMVarIO, newTVarIO, readTVar, takeTMVar, tryPutTMVar, writeTChan, writeTVar)
-import Control.Exception (Exception, IOException, bracket, bracket_, finally, handle, throwIO, try)
-import Control.Monad (forM_, forever, unless, when)
+import Control.Concurrent
+import Control.Concurrent.Async
+import Control.Concurrent.STM
+import Control.Exception
+import Control.Monad
 import Data.Aeson (eitherDecodeStrict)
 import Data.ByteString qualified as BS
 import Data.Foldable (asum)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
-import GHC.Exception (displayException)
 import Heos.Command.Heos (Command (..), renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
-import Heos.Connection.Parameters (ConnectionParams (..))
+import Heos.Connection.Types
 import Heos.Envelope.Heos (
   Envelope (..),
   HeosEvent (..),
   HeosHeader (..),
   IncomingEnvelope (..),
   classifyEnvelope,
+  decodePayload,
  )
 import Heos.Time (toMicros)
 import Heos.Types
@@ -32,78 +33,11 @@ import Network.Socket.ByteString (recv, sendAll)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
-data ConnectionError = ConnectionLost | ConnectionTimeout | LineTooLong deriving (Show, Eq)
-instance Exception ConnectionError where
-  displayException ConnectionLost = "the device closed the connection"
-  displayException ConnectionTimeout = "the device did not answer in time"
-  displayException LineTooLong = "the device sent a line longer than allowed"
-
-type EitherEnvelope = Either ConnectionError Envelope
-
--- | The two TCP sockets to the device, as the vendor recommends: one
---   carries notifications, the other carries commands, so a burst of
---   events never delays a reply.
-data ConnectionSockets = ConnectionSockets
-  { address :: HostAddress
-  , events :: Socket
-  , commands :: Socket
-  }
-
-getAddr :: HeosConnection -> HostAddress
-getAddr conn = conn.sockets.address
-
--- | Everything the two sockets share. The cells are created once per
---   connection in 'runConnection'; both readers and every sender use them.
-data ConnectionProps = ConnectionProps
-  { events :: TChan HeosEvent
-  -- ^ broadcast: the reader writes, subscribers read their own copies via 'subscribe'
-  , waiting :: TVar (Map Int (TMVar EitherEnvelope))
-  -- ^ commands in flight, by SEQUENCE: where the reader puts each reply
-  , nextSeq :: TVar Int
-  -- ^ the one SEQUENCE counter for this connection
-  , sendLock :: MVar ()
-  -- ^ one command in flight at a time, across both sockets; see 'sendOn'
-  , params :: ConnectionParams
-  }
-
--- | A live link to one HEOS device: the sockets and what they share.
---   Handed to the user's action; abstract outside this module.
-data HeosConnection = HeosConnection
-  { sockets :: ConnectionSockets
-  , props :: ConnectionProps
-  }
-
--- | The parameters this connection was opened with.
-connectionParams :: HeosConnection -> ConnectionParams
-connectionParams conn = conn.props.params
-
-getPid :: ConnectionParams -> PlayerId
-getPid params = params.playerId
-
--- | The start-up sequence the vendor prescribes: events off, the state
---   queries, events on. Subscription commands go over the events socket,
---   queries over the commands socket. A command without a reply throws,
---   so a half-initialized connection never reaches the action.
-initialize :: HeosConnection -> IO ()
-initialize conn = do
-  let (ConnectionSockets _ eSock cSock) = conn.sockets
-      props = conn.props
-      playerId = props.params.playerId
-      query = sendOn cSock props
-      subscribeCmd = sendOn eSock props
-  _ <- subscribeCmd (RegisterForChangeEvents Off)
-  -- TODO: поставить сюда signIn
-  -- TODO этап 30: тут нужно проверить, есть ли плееры, иначе и говорить дальше не о чем. Пустой список бросает ConnectionError. И если нет своего PlayerID — то тоже.
-  playersEnv <- query GetPlayers
-  groupsEnv <- query GetGroups
-  musicSourcesEnv <- query GetMusicSources
-  playingMediaEnv <- query (GetNowPlayingMedia playerId)
-  volumeEnv <- query (GetVolume playerId)
-  playStateEnv <- query (GetPlayState playerId)
-  _ <- subscribeCmd (RegisterForChangeEvents On)
-
-  let queryResults = [playersEnv, groupsEnv, musicSourcesEnv, playingMediaEnv, volumeEnv, playStateEnv]
-  forM_ queryResults print
+readPid :: Socket -> ConnectionProps -> IO PlayerId
+readPid connSock props = do
+  players <- sendOn connSock props GetPlayers >>= decodePayload @[Player]
+  player <- maybe (throwIO PlayerNotFound) pure (listToMaybe players)
+  pure player.pid
 
 -- | One TCP socket connected to the address, closed when the action is
 --   done, however it ends.
@@ -115,12 +49,15 @@ withSocket addr act = bracket open close $ \s -> connect s addr >> act s
 -- | Open both sockets to the device, run the start-up sequence, then the
 --   action. Both sockets are closed when the action is done. Everything
 --   but the sockets is 'runConnection'.
-withConnection :: ConnectionParams -> (HeosConnection -> IO a) -> HostAddress -> IO a
+withConnection :: HeosConnectionParams -> (HeosConnection -> IO a) -> HostAddress -> IO a
 withConnection params act hostAddr =
   let sockAddr = SockAddrInet params.port hostAddr
    in withSocket sockAddr $ \eSock ->
         withSocket sockAddr $ \cSock ->
-          runConnection params (ConnectionSockets hostAddr eSock cSock) $ \conn -> initialize conn >> act conn
+          let sockets = ConnectionSockets hostAddr eSock cSock
+           in runConnection params sockets $ \props -> do
+                pid <- readPid cSock props
+                act HeosConnection{sockets, props, pid}
 
 -- | Run them all; the first to end, or to fail, takes the rest down with it.
 together :: [IO Void] -> IO Void
@@ -132,14 +69,13 @@ together = runConcurrently . asum . map Concurrently
 --   done; if one of them dies first (the device closed a socket), the
 --   action is cancelled and the error propagates. Takes sockets rather
 --   than an address so tests can pass their own.
-runConnection :: ConnectionParams -> ConnectionSockets -> (HeosConnection -> IO a) -> IO a
-runConnection params sockets@(ConnectionSockets _ eSock cSock) act = do
+runConnection :: HeosConnectionParams -> ConnectionSockets -> (ConnectionProps -> IO a) -> IO a
+runConnection params (ConnectionSockets _ eSock cSock) act = do
   events <- newBroadcastTChanIO
   waiting <- newTVarIO Map.empty
   nextSeq <- newTVarIO @Int 0
   sendLock <- newMVar ()
   let props = ConnectionProps{events, waiting, nextSeq, sendLock, params}
-      conn = HeosConnection{sockets, props}
   -- endless threads run concurrently
   let bg =
         together
@@ -148,7 +84,7 @@ runConnection params sockets@(ConnectionSockets _ eSock cSock) act = do
           , reader eSock props -- reader для событий
           , reader cSock props -- reader для команд
           ]
-  res <- race bg (act conn)
+  res <- race bg (act props)
   either absurd pure res
 
 -- | The reader thread for one socket: the only one that reads it. Cuts the

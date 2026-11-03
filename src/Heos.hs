@@ -11,7 +11,7 @@ module Heos (
   module Heos.Time,
   module Heos.ToParam,
   module Heos.Types,
-  module Heos.Connection.Parameters,
+  module Heos.Device.Parameters,
   module Heos.Device,
   lookupParam,
 ) where
@@ -19,8 +19,8 @@ module Heos (
 import Heos.Command.Avr
 import Heos.Command.Heos
 import Heos.Connection
-import Heos.Connection.Parameters
 import Heos.Device
+import Heos.Device.Parameters
 import Heos.Effect.Avr
 import Heos.Effect.Heos
 import Heos.Envelope.Avr

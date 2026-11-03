@@ -9,21 +9,20 @@ import Control.Exception (bracket)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
-import Data.Maybe (fromMaybe)
 import Effectful (Eff, IOE, runEff)
-import Heos.Connection.Heos (ConnectionSockets (..), runConnection)
-import Heos.Connection.Parameters (ConnectionParams (..), reconnectionPolicy)
+import Control.Retry (constantDelay)
+import Heos.Connection.Heos (runConnection)
+import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..))
 import Heos.Effect.Heos
-import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, replyTo)
+import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, fixture, messageReply, replyTo, scripted)
 import Heos.Handler.Live (runHeosLive)
 import Heos.Time (Seconds (..))
 import Heos.Types
 import Network.Socket (Family (AF_UNIX), SocketType (Stream), close, socketPair, tupleToHostAddress)
-import System.FilePath ((</>))
 import Test.Hspec
 
-params :: ConnectionParams
-params = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1, maxLineLength = 64 * 1024, port = 1255, retryPolicy = reconnectionPolicy}
+params :: HeosConnectionParams
+params = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000}
 
 -- Run a program against the Live handler over a connection to a fake device
 -- that answers with `reply`. Returns the result and the commands the device
@@ -36,8 +35,10 @@ withLive reply prog =
       let record line = atomically (modifyTVar' seen (line :))
       withAsync (answering (const (pure ())) devEvents) $ \_ ->
         withAsync (answeringWith reply record devCommands) $ \_ -> do
-          result <- runConnection params (ConnectionSockets (tupleToHostAddress (127, 0, 0, 1)) ourEvents ourCommands) $ \conn ->
-            runEff (runHeosLive conn prog)
+          -- the player is not asked for here: pid 1 is set by hand
+          let sockets = ConnectionSockets (tupleToHostAddress (127, 0, 0, 1)) ourEvents ourCommands
+          result <- runConnection params sockets $ \props ->
+            runEff (runHeosLive HeosConnection{pid = PlayerId 1, sockets, props} prog)
           commands <- reverse <$> readTVarIO seen
           pure (result, commands)
  where
@@ -48,21 +49,6 @@ sent :: [ByteString] -> [(ByteString, ByteString)]
 sent = map (\l -> (commandPath l, dropSeq (commandQuery l)))
  where
   dropSeq q = BS.intercalate "&" [p | p <- BC.split '&' q, not ("SEQUENCE=" `BS.isPrefixOf` p)]
-
--- Answer from a table by command path; anything else gets the echo reply.
-scripted :: [(ByteString, ByteString)] -> ByteString -> ByteString
-scripted table line = fromMaybe (replyTo line) (lookup (commandPath line) table)
-
--- A success reply whose message carries the given query, the way get_volume
--- and get_play_state answer.
-messageReply :: ByteString -> ByteString -> ByteString
-messageReply path msg =
-  "{\"heos\": {\"command\": \"" <> path <> "\", \"result\": \"success\", \"message\": \"" <> msg <> "\"}}\r\n"
-
--- A recorded reply as one wire line. The files are pretty-printed; only
--- "\r\n" ends a line on the wire, so stray "\r" must go.
-fixture :: FilePath -> IO ByteString
-fixture file = (<> "\r\n") . BC.filter (/= '\r') <$> BS.readFile ("test/fixtures/responses" </> file)
 
 isProtocolError :: ProtocolError -> Bool
 isProtocolError _ = True

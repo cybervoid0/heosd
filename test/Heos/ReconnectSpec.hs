@@ -6,12 +6,12 @@ import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTV
 import Control.Exception (ErrorCall (..), bracket, throwIO)
 import Control.Monad (forever)
 import Control.Retry (constantDelay)
-import Heos.Connection.Parameters (ConnectionParams (..))
 import Heos.Connection.Reconnect (reconnecting)
 import Heos.Discovery (DiscoveryError (..))
-import Heos.FakeDevice (answering)
+import Heos.FakeDevice (answeringWith, playersLine)
+import Heos.FakeDevice qualified as Fake
 import Heos.Time (Seconds (..))
-import Heos.Types (PlayerId (..))
+import Heos.Types (HeosConnectionParams (..))
 import Network.Socket (
   Family (AF_INET),
   HostAddress,
@@ -67,12 +67,11 @@ freePort = withDeviceOn defaultPort (\port _ -> pure port)
 
 -- Parameters for a device on this port. The tests check that the next
 -- attempt happens, not how long it waits, hence the 10 ms policy.
-paramsFor :: PortNumber -> ConnectionParams
+paramsFor :: PortNumber -> HeosConnectionParams
 paramsFor port =
-  ConnectionParams
+  HeosConnectionParams
     { commandTimeout = Seconds 1
     , heartbeatDelay = Seconds 3600
-    , playerId = PlayerId 1
     , maxLineLength = 64 * 1024
     , port
     , retryPolicy = constantDelay 10000
@@ -85,12 +84,12 @@ withBoth srv k =
   bracket (fst <$> accept srv) close $ \a ->
     bracket (fst <$> accept srv) close $ \b -> k a b
 
--- Answer every command on both sockets (the start-up sequence included)
--- until the daemon hangs up.
+-- Answer every command on both sockets until the daemon hangs up.
+-- get_players gets a real player: withConnection needs one to come up.
 answerBoth :: Socket -> Socket -> IO ()
-answerBoth a b = answering ignore a `concurrently_` answering ignore b
+answerBoth a b = answer a `concurrently_` answer b
  where
-  ignore _ = pure ()
+  answer = answeringWith (Fake.scripted [("player/get_players", playersLine)]) (const (pure ()))
 
 serve :: Socket -> IO ()
 serve srv = withBoth srv answerBoth

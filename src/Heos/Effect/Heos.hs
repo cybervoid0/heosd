@@ -1,14 +1,10 @@
 module Heos.Effect.Heos where
 
-import Control.Exception (Exception)
 import Control.Monad (forM_)
 import Data.Text (Text)
 import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, (:>))
 import Effectful.Dispatch.Dynamic (send)
 import Heos.Types
-
-newtype ProtocolError = ProtocolError Text deriving (Show)
-instance Exception ProtocolError
 
 {- the Heos effect: domain operations -}
 

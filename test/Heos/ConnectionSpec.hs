@@ -14,9 +14,10 @@ import Heos.Command.Heos (Command (..))
 import Heos.Types
 import Data.Map.Strict qualified as Map
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
-import Heos.Connection.Heos (HeosConnection (..), ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), findBox, initialize, runConnection, sendCommand, subscribe)
-import Heos.Connection.Parameters (ConnectionParams (..), reconnectionPolicy)
-import Heos.FakeDevice (answering, commandPath, commandQuery)
+import Control.Retry (constantDelay)
+import Heos.Connection.Heos (findBox, readPid, runConnection, sendCommand, subscribe)
+import Heos.Connection.Types (ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), HeosConnection (..))
+import Heos.FakeDevice (answering, answeringWith, commandPath, fixture, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Envelope.Heos (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
 import Heos.Url (decodeQuery)
@@ -81,6 +82,10 @@ getPlayersLine :: ByteString
 getPlayersLine =
   "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"success\", \"message\": \"\"}, \"payload\": [{\"name\": \"Marantz MODEL 60n\", \"pid\": -1245882071}]}\r\n"
 
+noPlayersLine :: ByteString
+noPlayersLine =
+  "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"success\", \"message\": \"\"}, \"payload\": []}\r\n"
+
 heartBeatLine :: ByteString
 heartBeatLine =
   "{\"heos\": {\"command\": \"system/heart_beat\", \"result\": \"success\", \"message\": \"\"}}\r\n"
@@ -108,8 +113,8 @@ exchange conn theirs cmd inspect replies = do
 -- A one-second command timeout: long enough for a fake device that answers
 -- at once, short enough to fail a test rather than hang it. Heartbeats are
 -- an hour apart so they never interfere with the command under test.
-testParams :: ConnectionParams
-testParams = ConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, playerId = PlayerId 1, maxLineLength = 64 * 1024, port = 1255, retryPolicy = reconnectionPolicy}
+testParams :: HeosConnectionParams
+testParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000}
 
 -- Sockets here come from socketPair, so the address is never dialled;
 -- it only fills the field.
@@ -141,12 +146,19 @@ withAnsweringDevice dev k = do
     withAsync (answering (record CommandsLane) dev.devCommands) $ \_ ->
       k seen
 
+-- runConnection hands out the shared cells; the tests wrap them into a
+-- connection the way withConnection does, with pid 1 set by hand, since
+-- no player is asked for here.
+runConn :: HeosConnectionParams -> ConnectionSockets -> (HeosConnection -> IO a) -> IO a
+runConn params sockets act =
+  runConnection params sockets $ \props -> act HeosConnection{pid = PlayerId 1, sockets, props}
+
 -- Most tests exercise one lane: `ours` becomes the commands socket and the
 -- events lane stays idle (open, silent). The same reader serves both
 -- sockets, so what these tests establish for one lane holds for the other.
-runWith :: ConnectionParams -> Socket -> (HeosConnection -> IO a) -> IO a
+runWith :: HeosConnectionParams -> Socket -> (HeosConnection -> IO a) -> IO a
 runWith params ours act =
-  withSocketPair $ \(idle, _) -> runConnection params (ConnectionSockets loopback idle ours) act
+  withSocketPair $ \(idle, _) -> runConn params (ConnectionSockets loopback idle ours) act
 
 run :: Socket -> (HeosConnection -> IO a) -> IO a
 run = runWith testParams
@@ -457,55 +469,42 @@ spec = do
           forever (threadDelay 100000) :: IO ()
         outcome `shouldSatisfy` \o -> case o of Just (Left _) -> True; _ -> False
 
-  describe "initialize" $ do
-    -- The order the vendor prescribes: events off first, so the state
-    -- queries aren't interleaved with notifications; events on last.
-    -- Subscriptions go over the events socket, queries over the commands
-    -- socket, and the events socket never carries a query.
-    it "runs the start-up sequence in the prescribed order, each command on its lane" $
-      withLanes $ \sockets dev ->
-        withAnsweringDevice dev $ \seen -> do
-          runConnection testParams sockets initialize
-          commands <- reverse <$> readTVarIO seen
-          map (fmap commandPath) commands
-            `shouldBe` [ (EventsLane, "system/register_for_change_events")
-                       , (CommandsLane, "player/get_players")
-                       , (CommandsLane, "group/get_groups")
-                       , (CommandsLane, "browse/get_music_sources")
-                       , (CommandsLane, "player/get_now_playing_media")
-                       , (CommandsLane, "player/get_volume")
-                       , (CommandsLane, "player/get_play_state")
-                       , (EventsLane, "system/register_for_change_events")
-                       ]
-          let enables = [BC.takeWhile (/= '&') q | q <- map (commandQuery . snd) commands, "enable=" `BS.isPrefixOf` q]
-          enables `shouldBe` ["enable=off", "enable=on"]
+  describe "readPid" $ do
+    -- The player is not a parameter: it is whatever the device lists
+    -- first in get_players.
+    it "takes the pid of the first player the device lists" $
+      withLanes $ \sockets dev -> do
+        players <- fixture "get_players.json"
+        withAsync (answeringWith (scripted [("player/get_players", players)]) (const (pure ())) dev.devCommands) $ \_ -> do
+          pid <- runConnection testParams sockets $ \props -> readPid sockets.commands props
+          pid `shouldBe` PlayerId (-1245882071)
 
-    -- The player queries go to the configured player, not to a hard-coded one.
-    it "asks about the player from the parameters" $
+    -- No players yet (the device is still coming up): a ConnectionError,
+    -- so the reconnect loop tries again.
+    it "ends with PlayerNotFound when the list is empty" $
       withLanes $ \sockets dev ->
-        withAnsweringDevice dev $ \seen -> do
-          runConnection testParams{playerId = PlayerId 42} sockets initialize
-          commands <- map snd <$> readTVarIO seen
-          filter (BS.isPrefixOf "pid=42" . commandQuery) commands `shouldSatisfy` ((== 3) . length)
+        withAsync (answeringWith (scripted [("player/get_players", noPlayersLine)]) (const (pure ())) dev.devCommands) $ \_ ->
+          runConnection testParams sockets (\props -> readPid sockets.commands props)
+            `shouldThrow` (== PlayerNotFound)
 
     -- A start-up command that gets no reply means the connection is no good:
-    -- initialize throws rather than carrying on with half a state, and the
-    -- reconnect loop takes it from there.
+    -- it throws rather than carrying on without a player, and the reconnect
+    -- loop takes it from there.
     it "ends with ConnectionTimeout when the device doesn't answer" $
-      withSocketPair $ \(ours, _) ->
-        runWith testParams{commandTimeout = Seconds 0.1} ours initialize
+      withLanes $ \sockets _ ->
+        runConnection testParams{commandTimeout = Seconds 0.1} sockets (\props -> readPid sockets.commands props)
           `shouldThrow` (== ConnectionTimeout)
 
   describe "two sockets" $ do
     it "sends commands over the commands socket only" $
       withLanes $ \sockets dev ->
-        runConnection testParams sockets $ \conn -> do
+        runConn testParams sockets $ \conn -> do
           _ <- exchange conn dev.devCommands (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 0]
           timeout 100000 (recv dev.devEvents 4096) `shouldReturn` Nothing
 
     it "delivers events from the events socket to subscribers" $
       withLanes $ \sockets dev ->
-        runConnection testParams sockets $ \conn -> do
+        runConn testParams sockets $ \conn -> do
           ch <- subscribe conn
           sendAll dev.devEvents (eventLine "player_volume_changed" "pid=1&level=7")
           nextEvent ch `shouldReturn` volumeEvent "7"
@@ -514,7 +513,7 @@ spec = do
     -- on it throws, and the race takes the rest down.
     it "ends with ConnectionLost when the device closes the events socket" $
       withLanes $ \sockets dev ->
-        runConnection testParams sockets (\_ -> close dev.devEvents >> forever (threadDelay 100000) :: IO ())
+        runConn testParams sockets (\_ -> close dev.devEvents >> forever (threadDelay 100000) :: IO ())
           `shouldThrow` (== ConnectionLost)
 
   describe "findBox" $ do
