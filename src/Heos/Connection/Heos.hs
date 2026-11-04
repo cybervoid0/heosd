@@ -26,7 +26,6 @@ import Control.Exception (
   finally,
   handle,
   throwIO,
-  try,
  )
 import Control.Monad (forM_, forever, unless, when)
 import Data.Aeson (eitherDecodeStrict)
@@ -44,7 +43,6 @@ import Heos.Connection.Types (
   ConnectionError (..),
   ConnectionProps (..),
   ConnectionSockets (ConnectionSockets, commands),
-  EitherEnvelope,
   HeosConnection (..),
  )
 import Heos.Envelope.Heos (
@@ -211,8 +209,8 @@ sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
 
 -- | 'sendOn' over the commands socket, for callers outside this module:
 --   a connection error comes back as a value, not as an exception.
-sendCommand :: HeosConnection -> Command -> IO EitherEnvelope
-sendCommand conn cmd = try @ConnectionError $ sendOn conn.sockets.commands conn.props cmd
+sendCommand :: HeosConnection -> Command -> IO Envelope
+sendCommand conn = sendOn conn.sockets.commands conn.props
 
 -- | Keep one socket alive: a heart_beat every 'heartbeatDelay'. The device
 --   drops a socket that stays silent, so each socket gets its own. A beat

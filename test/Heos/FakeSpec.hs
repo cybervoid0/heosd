@@ -19,9 +19,10 @@ run = runPureEff . runHeosFake
 tidal :: SourceId
 tidal = SourceId 10
 
--- | Что сейчас играет, по названию песни.
+-- | Что сейчас играет, по названию песни; тишина это пустое имя,
+-- в сценариях здесь всегда что-то играет.
 playing :: (Heos :> es) => Eff es Text
-playing = (.song) <$> getNowPlaying
+playing = maybe "" (.song) <$> getNowPlaying
 
 -- | Первая играбельная цель из поиска.
 firstTarget :: (Heos :> es) => SearchKind -> Text -> Eff es Playable

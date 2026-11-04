@@ -1,44 +1,80 @@
--- | The Live handler over a fake device: each operation of the effect must
---   turn into the right command on the wire, and each reply into the right
+-- | The Live handler over a fake device: each action of the effect must
+--   turn into the right command on the wire, each query must be answered
+--   from the cache without a command, and each reply must become the right
 --   value. Nothing here is about sockets; that is ConnectionSpec's job.
 module Heos.LiveSpec (spec) where
 
+import Control.Concurrent (newEmptyMVar)
 import Control.Concurrent.Async (withAsync)
 import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception (bracket)
+import Control.Retry (constantDelay)
+import Data.Aeson (FromJSON, eitherDecodeFileStrict)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
+import Data.Map.Strict qualified as Map
 import Effectful (Eff, IOE, runEff)
-import Control.Retry (constantDelay)
+import Heos.Connection.Avr (AvrConnection (..))
 import Heos.Connection.Heos (runConnection)
 import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..))
+import Heos.Device (Device (..))
 import Heos.Effect.Heos
-import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, fixture, messageReply, replyTo, scripted)
+import Heos.Envelope.Heos (Envelope, decodePayload)
+import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, fixture, replyTo, scripted)
 import Heos.Handler.Live (runHeosLive)
 import Heos.Time (Seconds (..))
 import Heos.Types
 import Network.Socket (Family (AF_UNIX), SocketType (Stream), close, socketPair, tupleToHostAddress)
+import System.FilePath ((</>))
 import Test.Hspec
 
-params :: HeosConnectionParams
-params = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000}
+heosParams :: HeosConnectionParams
+heosParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000}
 
--- Run a program against the Live handler over a connection to a fake device
--- that answers with `reply`. Returns the result and the commands the device
--- saw on the commands socket, in order.
+avrParams :: AvrConnectionParams
+avrParams = AvrConnectionParams{port = 23, requestTimeout = Seconds 1}
+
+-- The payload of a recorded reply, decoded.
+recorded :: (FromJSON a) => FilePath -> IO a
+recorded file =
+  eitherDecodeFileStrict @Envelope ("test/fixtures/responses" </> file)
+    >>= either fail pure
+    >>= decodePayload
+
+-- What the device would have been found with: the recorded players and
+-- sources, Tidal's criteria for Tidal (sid 10), none for TuneIn (sid 3).
+catalogueOf :: IO Catalogue
+catalogueOf = do
+  players <- recorded "get_players.json"
+  sources <- recorded "get_music_sources.json"
+  tidal <- recorded "search_criteria.json"
+  pure Catalogue{players, sources, criteria = Map.fromList [(SourceId 10, tidal), (SourceId 3, [])]}
+
+-- The cache as the tracker left it.
+cached :: LiveState
+cached = LiveState{nowPlaying = Nothing, volume = 15, playState = Play}
+
+-- Run a program against the Live handler over a device whose HEOS
+-- connection goes to a fake answering with `reply`. The AVR side is never
+-- touched by this handler, so it is an empty cell. Returns the result and
+-- the commands the device saw on the commands socket, in order.
 withLive :: (ByteString -> ByteString) -> Eff '[Heos, IOE] a -> IO (a, [ByteString])
 withLive reply prog =
   withPair $ \(ourEvents, devEvents) ->
     withPair $ \(ourCommands, devCommands) -> do
       seen <- newTVarIO []
+      catalogue <- catalogueOf
+      state <- newTVarIO cached
+      avr <- (`AvrConnection` avrParams) <$> newEmptyMVar
       let record line = atomically (modifyTVar' seen (line :))
       withAsync (answering (const (pure ())) devEvents) $ \_ ->
         withAsync (answeringWith reply record devCommands) $ \_ -> do
           -- the player is not asked for here: pid 1 is set by hand
           let sockets = ConnectionSockets (tupleToHostAddress (127, 0, 0, 1)) ourEvents ourCommands
-          result <- runConnection params sockets $ \props ->
-            runEff (runHeosLive HeosConnection{pid = PlayerId 1, sockets, props} prog)
+          result <- runConnection heosParams sockets $ \props -> do
+            let heos = HeosConnection{pid = PlayerId 1, sockets, props}
+            runEff (runHeosLive Device{heos, avr, catalogue, state} prog)
           commands <- reverse <$> readTVarIO seen
           pure (result, commands)
  where
@@ -87,54 +123,60 @@ spec = describe "runHeosLife" $ do
       (_, cmds) <- withLive replyTo (playAll [item "a", item "b", item "c"])
       map snd (sent cmds) `shouldBe` ["pid=1&sid=10&cid=a&aid=4", "pid=1&sid=10&cid=b&aid=3", "pid=1&sid=10&cid=c&aid=3"]
 
-  describe "replies coming back" $ do
-    it "getVolume reads level from the message" $ do
-      (v, _) <- withLive (scripted [("player/get_volume", messageReply "player/get_volume" "pid=1&level=15")]) getVolume
+  -- Stage 30's check: "what plays" is answered at once, from the cache the
+  -- tracker keeps, and the device is not asked.
+  describe "queries answered from the cache" $ do
+    it "getVolume comes from the cache, no command sent" $ do
+      (v, cmds) <- withLive replyTo getVolume
       v `shouldBe` 15
+      cmds `shouldBe` []
 
-    it "getPlayState reads state from the message" $ do
-      (s, _) <- withLive (scripted [("player/get_play_state", messageReply "player/get_play_state" "pid=1&state=play")]) getPlayState
+    it "getPlayState comes from the cache, no command sent" $ do
+      (s, cmds) <- withLive replyTo getPlayState
       s `shouldBe` Play
+      cmds `shouldBe` []
 
-    it "getPlayers decodes the payload of a recorded reply" $ do
-      players <- fixture "get_players.json"
-      (ps, _) <- withLive (scripted [("player/get_players", players)]) getPlayers
+    it "getNowPlaying comes from the cache, no command sent" $ do
+      (t, cmds) <- withLive replyTo getNowPlaying
+      t `shouldBe` Nothing
+      cmds `shouldBe` []
+
+    it "getPlayers and getSources come from the catalogue, no command sent" $ do
+      ((ps, ss), cmds) <- withLive replyTo ((,) <$> getPlayers <*> getSources)
       map (.name) ps `shouldBe` ["Marantz MODEL 60n"]
+      length ss `shouldBe` 11
+      cmds `shouldBe` []
 
+  describe "replies coming back" $ do
     -- A reply the handler cannot make sense of is a ProtocolError, not a
-    -- silent default: here the device answered get_volume without a level.
-    it "a message without the expected key is a ProtocolError" $
-      withLive replyTo getVolume `shouldThrow` isProtocolError
-
+    -- silent default: here the device answered the search without results.
     it "a reply without payload where one is expected is a ProtocolError" $
-      withLive replyTo getPlayers `shouldThrow` isProtocolError
+      withLive replyTo (search (SourceId 10) TrackKind "x") `shouldThrow` isProtocolError
 
   describe "search" $ do
-    it "asks for the criteria, then searches with the matching scid, and returns playable tracks" $ do
-      criteria <- fixture "search_criteria.json"
+    -- The criteria are in the catalogue since start-up: the search goes
+    -- straight to the device with the matching scid.
+    it "searches with the scid from the catalogue and returns playable tracks" $ do
       results <- fixture "search_ok_computer.json"
       (found, cmds) <-
         withLive
-          (scripted [("browse/get_search_criteria", criteria), ("browse/search", results)])
+          (scripted [("browse/search", results)])
           (search (SourceId 10) TrackKind "Ok Computer")
-      sent cmds
-        `shouldBe` [ ("browse/get_search_criteria", "sid=10")
-                   , ("browse/search", "sid=10&search=Ok Computer&scid=3")
-                   ]
+      sent cmds `shouldBe` [("browse/search", "sid=10&search=Ok Computer&scid=3")]
       length found `shouldBe` 50
       [t | Found{target = Just t} <- found]
         `shouldSatisfy` all (\case PlayTrack (SourceId 10) (ContainerId "SEARCHED_TRACKS-Ok Computer") _ -> True; _ -> False)
 
-    it "picks the scid the device gives for the kind, not a fixed number" $ do
-      criteria <- fixture "search_criteria.json"
+    it "picks the scid the device gave for the kind, not a fixed number" $ do
       results <- fixture "search_ok_computer.json"
       (_, cmds) <-
         withLive
-          (scripted [("browse/get_search_criteria", criteria), ("browse/search", results)])
+          (scripted [("browse/search", results)])
           (search (SourceId 10) PlaylistKind "chill")
-      map snd (sent cmds) `shouldBe` ["sid=10", "sid=10&search=chill&scid=6"]
+      map snd (sent cmds) `shouldBe` ["sid=10&search=chill&scid=6"]
 
     it "fails with a ProtocolError, without searching, when the source has no such criterion" $ do
-      let noCriteria = "{\"heos\": {\"command\": \"browse/get_search_criteria\", \"result\": \"success\", \"message\": \"sid=3\"}, \"payload\": []}\r\n"
-      withLive (scripted [("browse/get_search_criteria", noCriteria)]) (search (SourceId 3) TrackKind "x")
-        `shouldThrow` isProtocolError
+      withLive replyTo (search (SourceId 3) TrackKind "x") `shouldThrow` isProtocolError
+
+    it "fails with a ProtocolError, without searching, for a source the device does not list" $ do
+      withLive replyTo (search (SourceId 99) TrackKind "x") `shouldThrow` isProtocolError

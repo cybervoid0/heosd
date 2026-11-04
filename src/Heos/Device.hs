@@ -1,17 +1,21 @@
 module Heos.Device where
 
-import Control.Concurrent.STM (TVar, newTVarIO)
-import Control.Monad (forM)
+import Control.Concurrent.Async (race)
+import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
+import Control.Exception (handle)
+import Control.Monad (forM, forM_, forever)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Void (Void, absurd)
 import Heos.Command.Heos (Command (..))
-import Heos.Connection (HeosConnection (..), getAddr, withAvr, withReconnect)
+import Heos.Connection (HeosConnection (..), getAddr, sendCommand, subscribe, withAvr, withReconnect)
 import Heos.Connection.Avr (AvrConnection)
 import Heos.Connection.Heos (sendOn)
 import Heos.Connection.Types (ConnectionSockets (..))
 import Heos.Device.Parameters
-import Heos.Envelope.Heos (decodePayload, fromMessage)
+import Heos.Envelope.Heos (HeosEvent (HeosEvent), decodePayload, fromMessage)
 import Heos.Types
+import Heos.Url (lookupParam)
 import Text.Read (readMaybe)
 
 data Device = Device
@@ -24,15 +28,25 @@ data Device = Device
 withDevice :: DeviceParams -> (Device -> IO a) -> IO a
 withDevice params act = withReconnect params.heos $ \conn ->
   withAvr params.avr (getAddr conn) $ \avrConn -> do
+    chan <- subscribe conn
     (catalogue, liveState) <- initialize conn
     state <- newTVarIO liveState
-    act
-      Device
-        { heos = conn
-        , avr = avrConn
-        , catalogue
-        , state
-        }
+    let dev = Device{heos = conn, avr = avrConn, catalogue, state}
+    race (tracker chan state conn) (act dev) >>= either absurd pure
+
+tracker :: TChan HeosEvent -> TVar LiveState -> HeosConnection -> IO Void
+tracker chan state conn =
+  forever $
+    atomically (readTChan chan) >>= \case
+      HeosEvent "player_volume_changed" p -> forM_ (lookupParam "level" p >>= readMaybe . T.unpack) $ \volume ->
+        atomically $ modifyTVar' state $ \s -> s{volume}
+      HeosEvent "player_state_changed" p -> forM_ (lookupParam "state" p >>= parsePlayState) $ \playState -> atomically $ modifyTVar' state $ \s -> s{playState}
+      HeosEvent "player_now_playing_changed" _ -> handle skipBadReply $ do
+        track <- sendCommand conn (GetNowPlayingMedia conn.pid) >>= decodePayload
+        atomically $ modifyTVar' state $ \s -> s{nowPlaying = Just track}
+      _ -> pure ()
+ where
+  skipBadReply (ProtocolError msg) = putStrLn ("now playing: " <> T.unpack msg)
 
 -- | The start-up sequence the vendor prescribes: events off, the state
 --   queries, events on. Subscription commands go over the events socket,

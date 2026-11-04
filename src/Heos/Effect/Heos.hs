@@ -9,53 +9,53 @@ import Heos.Types
 {- the Heos effect: domain operations -}
 
 data Heos :: Effect where
-  GetPlayersEff :: Heos m [Player]
-  GetSourcesEff :: Heos m [MusicSource]
-  GetNowPlayingEff :: Heos m Track
-  GetVolumeEff :: Heos m Int
-  GetPlayStateEff :: Heos m PlayState
-  SetPlayStateEff :: PlayState -> Heos m ()
-  SetVolumeEff :: Int -> Heos m ()
-  SetVolumeUpEff :: Int -> Heos m ()
-  SetVolumeDownEff :: Int -> Heos m ()
-  SearchEff :: SourceId -> SearchKind -> Text -> Heos m [Found]
-  EnqueueEff :: QueueMode -> Playable -> Heos m ()
-  PlayNextTrackEff :: Heos m ()
-  PlayPrevTrackEff :: Heos m ()
+  EGetPlayers :: Heos m [Player]
+  EGetSources :: Heos m [MusicSource]
+  EGetNowPlaying :: Heos m (Maybe Track)
+  EGetVolume :: Heos m Int
+  EGetPlayState :: Heos m PlayState
+  ESetPlayState :: PlayState -> Heos m ()
+  ESetVolume :: Int -> Heos m ()
+  ESetVolumeUp :: Int -> Heos m ()
+  ESetVolumeDown :: Int -> Heos m ()
+  ESearch :: SourceId -> SearchKind -> Text -> Heos m [Found]
+  EEnqueue :: QueueMode -> Playable -> Heos m ()
+  EPlayNextTrack :: Heos m ()
+  EPlayPrevTrack :: Heos m ()
 
 type instance DispatchOf Heos = Dynamic
 
 getPlayers :: (Heos :> es) => Eff es [Player]
-getPlayers = send GetPlayersEff
+getPlayers = send EGetPlayers
 
 getSources :: (Heos :> es) => Eff es [MusicSource]
-getSources = send GetSourcesEff
+getSources = send EGetSources
 
-getNowPlaying :: (Heos :> es) => Eff es Track
-getNowPlaying = send GetNowPlayingEff
+getNowPlaying :: (Heos :> es) => Eff es (Maybe Track)
+getNowPlaying = send EGetNowPlaying
 
 getVolume :: (Heos :> es) => Eff es Int
-getVolume = send GetVolumeEff
+getVolume = send EGetVolume
 
 getPlayState :: (Heos :> es) => Eff es PlayState
-getPlayState = send GetPlayStateEff
+getPlayState = send EGetPlayState
 setPlayState :: (Heos :> es) => PlayState -> Eff es ()
-setPlayState = send . SetPlayStateEff
+setPlayState = send . ESetPlayState
 
 setVolume :: (Heos :> es) => Int -> Eff es ()
-setVolume = send . SetVolumeEff
+setVolume = send . ESetVolume
 
 volumeUp :: (Heos :> es) => Int -> Eff es ()
-volumeUp = send . SetVolumeUpEff
+volumeUp = send . ESetVolumeUp
 
 volumeDown :: (Heos :> es) => Int -> Eff es ()
-volumeDown = send . SetVolumeDownEff
+volumeDown = send . ESetVolumeDown
 
 search :: (Heos :> es) => SourceId -> SearchKind -> Text -> Eff es [Found]
-search sid sk = send . SearchEff sid sk
+search sid sk = send . ESearch sid sk
 
 enqueue :: (Heos :> es) => QueueMode -> Playable -> Eff es ()
-enqueue qm = send . EnqueueEff qm
+enqueue qm = send . EEnqueue qm
 
 playItem :: (Heos :> es) => Playable -> Eff es ()
 playItem = enqueue AddReplaceAndPlay
@@ -65,7 +65,7 @@ playAll [] = pure ()
 playAll (x : xs) = playItem x >> forM_ xs (enqueue AddToEnd)
 
 playNext :: (Heos :> es) => Eff es ()
-playNext = send PlayNextTrackEff
+playNext = send EPlayNextTrack
 
 playPrevious :: (Heos :> es) => Eff es ()
-playPrevious = send PlayPrevTrackEff
+playPrevious = send EPlayPrevTrack

@@ -106,7 +106,7 @@ exchange :: HeosConnection -> Socket -> Command -> (ByteString -> IO ()) -> [Byt
 exchange conn theirs cmd inspect replies = do
   (reply, ()) <-
     concurrently
-      (timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") unwrap)
+      (timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") pure)
       (recv theirs 4096 >>= inspect >> mapM_ (sendAll theirs) replies)
   pure reply
 
@@ -162,10 +162,6 @@ runWith params ours act =
 
 run :: Socket -> (HeosConnection -> IO a) -> IO a
 run = runWith testParams
-
--- The tests here expect the device to answer; a Left is a failure.
-unwrap :: Either ConnectionError Envelope -> IO Envelope
-unwrap = either (\e -> fail ("sendCommand failed: " <> show e)) pure
 
 -- How many commands are in flight right now.
 inFlight :: HeosConnection -> IO Int
@@ -343,7 +339,7 @@ spec = do
     it "serialises concurrent commands and gives each its own reply" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn -> do
-          let bounded cmd = timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") unwrap
+          let bounded cmd = timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") pure
               device = do
                 first' <- recv theirs 4096
                 sendAll theirs (if "heart_beat" `BS.isInfixOf` first' then heartBeatLine else getPlayersLine)
@@ -387,13 +383,13 @@ spec = do
   -- nobody cancels them, so the only way they learn the link is gone is
   -- the Left the reader puts into their boxes on its way out.
   describe "when the connection dies" $ do
-    it "a command waiting for its reply gets Left ConnectionLost, not a hang" $
+    it "a command waiting for its reply fails with ConnectionLost, not a hang" $
       withSocketPair $ \(ours, theirs) -> do
         result <- newEmptyMVar
         connVar <- newEmptyMVar
         outcome <- timeout 2000000 $ try @SomeException $ run ours $ \conn -> do
           putMVar connVar conn
-          _ <- forkIO (sendCommand conn HeartBeat >>= putMVar result)
+          _ <- forkIO (try @ConnectionError (sendCommand conn HeartBeat) >>= putMVar result)
           threadDelay 100000 -- let it register its box and send
           close theirs -- the device goes away
           forever (threadDelay 100000) :: IO ()
@@ -402,11 +398,11 @@ spec = do
         conn <- takeMVar connVar
         inFlight conn `shouldReturn` 0
 
-    it "a command still waiting when the action ends gets Left ConnectionLost" $
+    it "a command still waiting when the action ends fails with ConnectionLost" $
       withSocketPair $ \(ours, _) -> do
         result <- newEmptyMVar
         run ours $ \conn -> do
-          _ <- forkIO (sendCommand conn HeartBeat >>= putMVar result)
+          _ <- forkIO (try @ConnectionError (sendCommand conn HeartBeat) >>= putMVar result)
           threadDelay 100000
         -- runConnection returned: the reader was cancelled and failed the waiter
         timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
@@ -414,21 +410,21 @@ spec = do
     -- The sender is forked first and sends only once the reader is gone:
     -- closing the socket ends runConnection at once, so nothing can be
     -- forked after that from inside the action.
-    it "a command sent after the device went away fails with Left ConnectionLost" $
+    it "a command sent after the device went away fails with ConnectionLost" $
       withSocketPair $ \(ours, theirs) -> do
         result <- newEmptyMVar
         _ <- timeout 2000000 $ try @SomeException $ run ours $ \conn -> do
-          _ <- forkIO (threadDelay 100000 >> sendCommand conn HeartBeat >>= putMVar result)
+          _ <- forkIO (threadDelay 100000 >> try @ConnectionError (sendCommand conn HeartBeat) >>= putMVar result)
           close theirs
           forever (threadDelay 100000) :: IO ()
         timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
 
   -- Stage 21. A 100 ms timeout here; the daemon uses 5 s.
   describe "when the device is silent" $ do
-    it "gives up with Left ConnectionTimeout and leaves nothing in flight" $
+    it "gives up with ConnectionTimeout and leaves nothing in flight" $
       withSocketPair $ \(ours, _) ->
         runWith testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
-          outcome <- timeout 2000000 (sendCommand conn HeartBeat)
+          outcome <- timeout 2000000 (try @ConnectionError (sendCommand conn HeartBeat))
           outcome `shouldBe` Just (Left ConnectionTimeout)
           inFlight conn `shouldReturn` 0
 
@@ -437,7 +433,7 @@ spec = do
     it "drops the late reply and serves the next command" $
       withSocketPair $ \(ours, theirs) ->
         runWith testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
-          _ <- sendCommand conn HeartBeat
+          _ <- try @ConnectionError (sendCommand conn HeartBeat) -- times out
           _ <- recv theirs 4096 -- the device finally reads the abandoned command...
           sendAll theirs heartBeatLine -- ...and answers it, too late
           threadDelay 50000

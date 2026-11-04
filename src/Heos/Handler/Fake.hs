@@ -2,7 +2,7 @@ module Heos.Handler.Fake where
 
 import Control.Monad (when)
 import Data.Function (on)
-import Data.List (nubBy)
+import Data.List (nubBy, (!?))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful (Eff)
@@ -50,19 +50,19 @@ defaultFakeState =
 
 runHeosFake :: Eff (Heos : es) a -> Eff es a
 runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
-  GetPlayersEff -> pure [defaultPlayer]
-  GetSourcesEff -> pure dummySources
-  GetNowPlayingEff -> getNowPlaying
-  GetVolumeEff -> gets @FakeState (.volume)
-  GetPlayStateEff -> gets @FakeState (.playState)
-  SetPlayStateEff ps -> modify $ \s -> s{playState = ps}
-  SetVolumeEff volume -> modify $ \s -> s{volume}
-  SetVolumeUpEff n -> modify $ \s -> s{volume = volClamp (s.volume + n)}
-  SetVolumeDownEff n -> modify $ \s -> s{volume = volClamp (s.volume - n)}
-  SearchEff sid kind txt -> pure $ search sid txt kind
-  EnqueueEff qm playable -> enqueue qm playable
-  PlayNextTrackEff -> modify $ \s -> s{currentTrack = min (length s.queue - 1) (s.currentTrack + 1)}
-  PlayPrevTrackEff -> modify $ \s -> s{currentTrack = max 0 (s.currentTrack - 1)}
+  EGetPlayers -> pure [defaultPlayer]
+  EGetSources -> pure dummySources
+  EGetNowPlaying -> getNowPlaying
+  EGetVolume -> gets @FakeState (.volume)
+  EGetPlayState -> gets @FakeState (.playState)
+  ESetPlayState ps -> modify $ \s -> s{playState = ps}
+  ESetVolume volume -> modify $ \s -> s{volume}
+  ESetVolumeUp n -> modify $ \s -> s{volume = volClamp (s.volume + n)}
+  ESetVolumeDown n -> modify $ \s -> s{volume = volClamp (s.volume - n)}
+  ESearch sid kind txt -> pure $ search sid txt kind
+  EEnqueue qm playable -> enqueue qm playable
+  EPlayNextTrack -> modify $ \s -> s{currentTrack = min (length s.queue - 1) (s.currentTrack + 1)}
+  EPlayPrevTrack -> modify $ \s -> s{currentTrack = max 0 (s.currentTrack - 1)}
  where
   volClamp = max 0 . min 100
   enqueue qm playable = do
@@ -75,7 +75,7 @@ runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
     queue <- gets @FakeState (.queue)
     when (null queue) $ throwIO (ProtocolError "queue is empty")
     currTrack <- gets @FakeState (.currentTrack)
-    pure $ queue !! currTrack
+    pure $ queue !? currTrack
 
 tracksFor :: Playable -> [Track]
 tracksFor = \case
