@@ -6,12 +6,14 @@ import Heos
 
 -- Стенд
 remote :: IO ()
-remote = withDevice defaultParams $ \dev -> runEff . runHeosLive dev . runAvrLive dev $ go
+remote = do
+  putStrLn $ "HEOS remote controller\n" <> help
+  withDevice defaultParams $ \dev -> runEff . runHeosLive dev . runAvrLive dev $ go
  where
   go =
     liftIO getLine >>= \case
       "q" -> pure ()
-      line -> fromMaybe (liftIO $ putStrLn "команды: + - > || >> << q v on off") (lookup line keys) >> go
+      line -> fromMaybe (liftIO $ putStrLn help) (lookup line keys) >> go
   keys =
     [ ("off", setPower Off)
     , ("on", setPower On)
@@ -31,3 +33,4 @@ remote = withDevice defaultParams $ \dev -> runEff . runHeosLive dev . runAvrLiv
       )
     , ("ms", getSources >>= liftIO . putStrLn . ("Music Sources: " <>) . show)
     ]
+  help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ ms (music sources) ‧ q (quit)"
