@@ -1,10 +1,10 @@
 module Main (main) where
 
-import FirstTalk (firstTalk)
+import Remote (remote)
 
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
-  firstTalk
+  remote
