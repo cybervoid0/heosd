@@ -3,10 +3,12 @@ module Heos.Connection.Types where
 import Control.Concurrent (MVar)
 import Control.Concurrent.STM (TChan, TMVar, TVar)
 import Control.Exception (Exception (..))
+import Control.Retry (RetryPolicyM)
 import Data.Map (Map)
 import Heos.Envelope.Heos (Envelope, HeosEvent)
-import Heos.Types (HeosConnectionParams, PlayerId)
-import Network.Socket (HostAddress, Socket)
+import Heos.Time (Seconds)
+import Heos.Types (PlayerId)
+import Network.Socket (HostAddress, PortNumber, Socket)
 
 data ConnectionError = ConnectionLost | ConnectionTimeout | LineTooLong | PlayerNotFound deriving (Show, Eq)
 instance Exception ConnectionError where
@@ -16,6 +18,18 @@ instance Exception ConnectionError where
   displayException PlayerNotFound = "no HEOS players in the local network"
 
 type EitherEnvelope = Either ConnectionError Envelope
+
+-- | What a HEOS connection is opened with.
+data HeosConnectionParams = HeosConnectionParams
+  { commandTimeout :: Seconds
+  -- ^ how long a command may wait for its reply
+  , heartbeatDelay :: Seconds
+  -- ^ pause between heartbeats on each socket
+  , maxLineLength :: Int
+  -- ^ how many bytes the device may send without a "\r\n" before the link
+  , port :: PortNumber
+  , retryPolicy :: RetryPolicyM IO
+  }
 
 -- | The two TCP sockets to the device, as the vendor recommends: one
 --   carries notifications, the other carries commands, so a burst of

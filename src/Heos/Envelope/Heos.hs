@@ -10,18 +10,20 @@ module Heos.Envelope.Heos (
   HeosError (..),
   HeosEvent (..),
   classifyEnvelope,
+
+  -- * Reading a reply
+  ProtocolError (..),
   decodePayload,
   fromMessage,
 ) where
 
-import Control.Exception (throwIO)
+import Control.Exception (Exception, throwIO)
 import Data.Aeson.Types (FromJSON (..), Options (..), Value, defaultOptions, genericParseJSON, parseEither)
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
-import Heos.Types
 import Heos.Url (UrlParam (UrlFlag), decodeQuery, lookupParam)
 import Text.Read (readMaybe)
 
@@ -90,6 +92,12 @@ classifyEnvelope env
   outcome = case env.heos.result of
     Just Fail -> Failed $ findError msg
     _ -> Succeeded
+
+-- | A reply that cannot be read as what the caller expected: no payload
+--   where one is due, a payload of the wrong shape, a message without the
+--   key. The connection is fine; the device said something unforeseen.
+newtype ProtocolError = ProtocolError Text deriving (Show)
+instance Exception ProtocolError
 
 -- the payload of a reply, decoded into whatever the operation returns
 decodePayload :: (FromJSON a) => Envelope -> IO a

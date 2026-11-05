@@ -15,12 +15,12 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Map.Strict qualified as Map
 import Effectful (Eff, IOE, runEff)
-import Heos.Connection.Avr (AvrConnection (..))
+import Heos.Connection.Avr (AvrConnection (..), AvrConnectionParams (..))
 import Heos.Connection.Heos (runConnection)
-import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..))
-import Heos.Device (Device (..))
+import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
+import Heos.Device (Catalogue (..), Device (..), LiveState (..))
 import Heos.Effect.Heos
-import Heos.Envelope.Heos (Envelope, decodePayload)
+import Heos.Envelope.Heos (Envelope, ProtocolError, decodePayload)
 import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, fixture, replyTo, scripted)
 import Heos.Handler.Live (runHeosLive)
 import Heos.Time (Seconds (..))

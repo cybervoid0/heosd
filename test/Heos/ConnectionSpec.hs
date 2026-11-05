@@ -16,7 +16,7 @@ import Data.Map.Strict qualified as Map
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
 import Control.Retry (constantDelay)
 import Heos.Connection.Heos (findBox, readPid, runConnection, sendCommand, subscribe)
-import Heos.Connection.Types (ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), HeosConnection (..))
+import Heos.Connection.Types (ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
 import Heos.FakeDevice (answering, answeringWith, commandPath, fixture, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Envelope.Heos (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))

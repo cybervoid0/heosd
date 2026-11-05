@@ -10,8 +10,8 @@ import Heos.Connection.Reconnect (reconnecting)
 import Heos.Discovery (DiscoveryError (..))
 import Heos.FakeDevice (answeringWith, playersLine)
 import Heos.FakeDevice qualified as Fake
+import Heos.Connection.Types (HeosConnectionParams (..))
 import Heos.Time (Seconds (..))
-import Heos.Types (HeosConnectionParams (..))
 import Network.Socket (
   Family (AF_INET),
   HostAddress,

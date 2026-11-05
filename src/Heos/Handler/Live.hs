@@ -9,9 +9,9 @@ import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Dispatch.Dynamic (interpret_)
 import Heos.Command.Heos (Command (..))
 import Heos.Connection (HeosConnection (..), sendCommand)
-import Heos.Device (Device (..))
+import Heos.Device (Catalogue (..), Device (..), LiveState (..))
 import Heos.Effect.Heos (Heos (..))
-import Heos.Envelope.Heos (decodePayload)
+import Heos.Envelope.Heos (ProtocolError (..), decodePayload)
 import Heos.Types
 
 runHeosLive :: (IOE :> es) => Device -> Eff (Heos : es) a -> Eff es a

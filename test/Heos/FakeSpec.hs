@@ -8,6 +8,7 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Effectful (Eff, runPureEff, (:>))
 import Heos.Effect.Heos
+import Heos.Envelope.Heos (ProtocolError (..))
 import Heos.Handler.Fake (runHeosFake)
 import Heos.Types
 import Test.Hspec

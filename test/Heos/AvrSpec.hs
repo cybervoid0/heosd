@@ -10,12 +10,12 @@ import Data.ByteString.Char8 qualified as BC
 import Data.Either (isLeft)
 import Effectful (runEff)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
-import Heos.Connection.Avr (AvrConnection, AvrConnectionError (..), answerOf, sendAvrCommand, withAvr)
+import Heos.Connection.Avr (AvrConnection, AvrConnectionError (..), AvrConnectionParams (..), answerOf, sendAvrCommand, withAvr)
 import Heos.Effect.Avr (getPower, setPower)
 import Heos.Envelope.Avr (decodeAvrLine)
 import Heos.Handler.AvrLive (runAvrLive)
 import Heos.Time (Seconds (..))
-import Heos.Types (AvrConnectionParams (..), OnOff (..))
+import Heos.Types (OnOff (..))
 import Network.Socket (
   Family (AF_INET),
   HostAddress,

@@ -6,9 +6,8 @@ import Control.Monad.Catch (bracket, bracketOnError)
 import Data.ByteString.Char8 qualified as B
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Envelope.Avr (AvrResponse (..), decodeAvrLine)
-import Heos.Time (toMicros)
-import Heos.Types
-import Network.Socket (Family (AF_INET), HostAddress, SockAddr (..), SocketType (Stream), socketToHandle)
+import Heos.Time (Seconds, toMicros)
+import Network.Socket (Family (AF_INET), HostAddress, PortNumber, SockAddr (..), SocketType (Stream), socketToHandle)
 import Network.Socket qualified as S
 import System.IO (Handle, IOMode (ReadWriteMode), hClose, hFlush, hGetChar, hSetBinaryMode)
 import System.Timeout (timeout)
@@ -16,6 +15,12 @@ import System.Timeout (timeout)
 data AvrConnectionError = AvrConnectionTimeout deriving (Show, Eq)
 instance Exception AvrConnectionError where
   displayException AvrConnectionTimeout = "the device did not answer via AVR in time"
+
+-- | What the telnet connection is opened with.
+data AvrConnectionParams = AvrConnectionParams
+  { port :: PortNumber
+  , requestTimeout :: Seconds
+  }
 
 data AvrConnection = AvrConnection
   { lock :: MVar Handle

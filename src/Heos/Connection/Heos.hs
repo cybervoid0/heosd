@@ -44,6 +44,7 @@ import Heos.Connection.Types (
   ConnectionProps (..),
   ConnectionSockets (ConnectionSockets, commands),
   HeosConnection (..),
+  HeosConnectionParams (..),
  )
 import Heos.Envelope.Heos (
   Envelope (..),

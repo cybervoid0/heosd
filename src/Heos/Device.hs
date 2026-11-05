@@ -4,6 +4,7 @@ import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
 import Control.Exception (handle)
 import Control.Monad (forM, forM_, forever)
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
@@ -13,7 +14,7 @@ import Heos.Connection.Avr (AvrConnection)
 import Heos.Connection.Heos (sendOn)
 import Heos.Connection.Types (ConnectionSockets (..))
 import Heos.Device.Parameters
-import Heos.Envelope.Heos (HeosEvent (HeosEvent), decodePayload, fromMessage)
+import Heos.Envelope.Heos (HeosEvent (HeosEvent), ProtocolError (..), decodePayload, fromMessage)
 import Heos.Types
 import Heos.Url (lookupParam)
 import Text.Read (readMaybe)
@@ -23,6 +24,21 @@ data Device = Device
   , avr :: AvrConnection
   , catalogue :: Catalogue
   , state :: TVar LiveState
+  }
+
+-- | What the device is: read once at start-up, never changes while the
+--   connection lives.
+data Catalogue = Catalogue
+  { players :: [Player]
+  , sources :: [MusicSource]
+  , criteria :: Map SourceId [SearchCriterion]
+  }
+
+-- | What the device is doing: read at start-up, kept current by 'tracker'.
+data LiveState = LiveState
+  { nowPlaying :: Maybe Track
+  , volume :: Int
+  , playState :: PlayState
   }
 
 withDevice :: DeviceParams -> (Device -> IO a) -> IO a

@@ -14,8 +14,9 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Map.Strict qualified as Map
 import Heos.Connection.Heos (runConnection, subscribe)
-import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..))
-import Heos.Device (initialize, tracker)
+import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
+import Heos.Device (Catalogue (..), LiveState (..), initialize, tracker)
+import Heos.Envelope.Heos (ProtocolError (..))
 import Heos.FakeDevice (answeringWith, commandPath, commandQuery, fixture, messageReply, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Types

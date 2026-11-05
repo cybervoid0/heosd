@@ -1,8 +1,9 @@
 module Heos.Device.Parameters where
 
 import Control.Retry (capDelay, exponentialBackoff)
+import Heos.Connection.Avr (AvrConnectionParams (..))
+import Heos.Connection.Types (HeosConnectionParams (..))
 import Heos.Time (Seconds (..), toMicros)
-import Heos.Types
 
 data DeviceParams = DeviceParams
   { heos :: HeosConnectionParams

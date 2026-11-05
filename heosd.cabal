@@ -115,10 +115,9 @@ library
                       Heos.Time
                       Heos.Json
                       Heos.Types
-                      Heos.Types.Records
-                      Heos.Types.Errors
-                      Heos.Types.Enums
-                      Heos.Types.Newtypes
+                      Heos.Types.System
+                      Heos.Types.Player
+                      Heos.Types.Browse
 
     -- Modules included in this library but not exported.
     -- other-modules:

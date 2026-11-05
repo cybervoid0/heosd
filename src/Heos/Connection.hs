@@ -1,6 +1,8 @@
 module Heos.Connection (
   withReconnect,
   HeosConnection (..),
+  HeosConnectionParams (..),
+  AvrConnectionParams (..),
   subscribe,
   sendCommand,
   connectionParams,
@@ -19,6 +21,7 @@ import Heos.Connection.Reconnect (
  )
 import Heos.Connection.Types (
   HeosConnection (..),
+  HeosConnectionParams (..),
   connectionParams,
   getAddr,
  )

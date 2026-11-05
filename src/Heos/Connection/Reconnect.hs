@@ -7,7 +7,6 @@ import Data.List.NonEmpty qualified as NE
 import Heos.Connection.Heos (withConnection)
 import Heos.Connection.Types
 import Heos.Discovery (DiscoveryError, discover)
-import Heos.Types
 import Network.Socket (HostAddress)
 
 -- | Find the device and run the action over a connection to it. If the
