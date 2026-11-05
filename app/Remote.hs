@@ -1,6 +1,7 @@
 module Remote (remote) where
 
 import Data.Maybe (fromMaybe)
+import Data.Text qualified as T
 import Effectful (MonadIO (liftIO), runEff)
 import Heos
 
@@ -8,10 +9,10 @@ import Heos
 remote :: IO ()
 remote = do
   putStrLn $ "HEOS remote controller\n" <> help
-  withDevice defaultParams $ \dev -> runEff . runHeosLive dev . runAvrLive dev $ go
+  withDevice defaultParams $ \dev -> runEff . runHeosLive dev . runAvrLive dev.avr $ go
  where
   go =
-    liftIO getLine >>= \case
+    liftIO (T.strip . T.pack <$> getLine) >>= \case
       "q" -> pure ()
       line -> fromMaybe (liftIO $ putStrLn help) (lookup line keys) >> go
   keys =
@@ -23,7 +24,7 @@ remote = do
     , ("||", setPlayState Pause)
     , (">>", playNext)
     , ("<<", playPrevious)
-    , ("ps", getPlayState >>= liftIO . print)
+    , ("ps", getPlayState >>= liftIO . putStrLn . ("State: " <>) . show)
     , ("v", getVolume >>= liftIO . putStrLn . ("Volume: " <>) . show)
     ,
       ( "np"

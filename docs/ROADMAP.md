@@ -1039,7 +1039,7 @@ heos://browse/add_to_queue?pid=<pid>&sid=<sid>&cid=SEARCHED_TRACKS-<строка
   обновляется сама, без опроса;
 - кэш 30-го этапа (`TVar DeviceState`) — это то, что экран рисует;
 - таблица `keys` из `FirstTalk` — это обработчик клавиш: нажатие → `Eff es ()`
-  через `runEff . runHeosLive conn . runAvrLive avrConn`.
+  через `runEff . runHeosLive dev . runAvrLive dev.avr`.
 
 Делать после 30-го (нужен кэш), в любой момент, когда захочется. MCP-сервер
 и пульт — две двери в один фасад, различаются только обвязкой.
