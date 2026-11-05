@@ -36,4 +36,11 @@ keys =
   , ("<<", playPrevious)
   , ("ps", getPlayState >>= liftIO . print)
   , ("v", getVolume >>= liftIO . putStrLn . ("Volume: " <>) . show)
+  ,
+    ( "np"
+    , getNowPlaying >>= \case
+        Just track -> liftIO . putStrLn . ("Playing: " <>) . show $ track
+        Nothing -> liftIO . putStrLn $ "The player is idle"
+    )
+  , ("ms", getSources >>= liftIO . putStrLn . ("Music Sources: " <>) . show)
   ]
