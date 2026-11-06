@@ -3,10 +3,12 @@
 --   these tests pin what the device actually sends, not what the spec says.
 module Heos.PayloadSpec (spec) where
 
-import Data.Aeson (FromJSON, Value (String), eitherDecodeFileStrict, eitherDecodeStrict, parseJSON)
+import Data.Aeson (FromJSON, Value, eitherDecodeFileStrict, eitherDecodeStrict, parseJSON)
 import Data.Aeson.Types (parseEither)
+import Data.ByteString (ByteString)
 import Data.Either (isLeft)
 import Data.List (find)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Heos.Envelope.Heos (Envelope (..))
@@ -26,6 +28,10 @@ payloadOf file = do
 -- with aeson's message, which names the missing or mistyped key.
 decodeAs :: (FromJSON a) => Value -> IO a
 decodeAs = either fail pure . parseEither parseJSON
+
+-- One search result written by hand, for the corner cases the fixture lacks.
+decodeResult :: ByteString -> IO SearchResult
+decodeResult = either fail pure . eitherDecodeStrict
 
 -- The source with this name, or a failure naming what's missing.
 named :: Text -> [MusicSource] -> IO MusicSource
@@ -53,15 +59,15 @@ spec = do
       tidal <- named "Tidal" sources
       tunein <- named "TuneIn" sources
       tidal.sid `shouldBe` SourceId 10
-      tidal.available `shouldBe` TrueFalse True
-      tidal.service_username `shouldBe` Just "ales.very@gmail.com"
-      tunein.available `shouldBe` TrueFalse False
-      tunein.service_username `shouldBe` Nothing
+      tidal.available `shouldBe` True
+      tidal.serviceUsername `shouldBe` Just "ales.very@gmail.com"
+      tunein.available `shouldBe` False
+      tunein.serviceUsername `shouldBe` Nothing
 
   describe "Track" $ do
     it "decodes a Tidal station from get_now_playing_media" $ do
       np <- payloadOf "now_playing.json" >>= decodeAs @Track
-      np._type `shouldBe` "station"
+      np.trackType `shouldBe` "station"
       np.song `shouldBe` "Lebanese Blonde"
       np.station `shouldBe` Just "Lebanese Blonde"
       np.artist `shouldBe` "Thievery Corporation"
@@ -72,7 +78,7 @@ spec = do
     it "decodes all fifty songs of a browse/search reply" $ do
       found <- payloadOf "search_ok_computer.json" >>= decodeAs @[SearchResult]
       length found `shouldBe` 50
-      map (._type) found `shouldSatisfy` all (== "song")
+      map (.resultType) found `shouldSatisfy` all (== "song")
 
     it "reads a song: mid and album present, cid absent" $ do
       found <- payloadOf "search_ok_computer.json" >>= decodeAs @[SearchResult]
@@ -80,8 +86,8 @@ spec = do
         r : _ -> pure r
         [] -> fail "no search results"
       first.name `shouldBe` "ok computer"
-      first.container `shouldBe` YesNo False
-      first.playable `shouldBe` YesNo True
+      first.container `shouldBe` False
+      first.playable `shouldBe` True
       first.mid `shouldBe` Just (MediaId "443242295")
       first.cid `shouldBe` Nothing
       first.artist `shouldBe` Just "Sef"
@@ -93,11 +99,11 @@ spec = do
     it "reads a container: cid present, song-only fields absent" $ do
       let json = "{\"container\": \"yes\", \"cid\": \"77\", \"type\": \"album\", \"playable\": \"yes\", \"name\": \"OK Computer\", \"image_url\": \"x\", \"artist\": \"Radiohead\"}"
       r <- either fail pure (eitherDecodeStrict @SearchResult json)
-      r.container `shouldBe` YesNo True
+      r.container `shouldBe` True
       r.cid `shouldBe` Just (ContainerId "77")
       r.mid `shouldBe` Nothing
       r.album `shouldBe` Nothing
-      r.album_id `shouldBe` Nothing
+      r.albumId `shouldBe` Nothing
 
   -- The criteria are per source: the device says which scid means what.
   describe "criterionFor" $ do
@@ -109,39 +115,51 @@ spec = do
     it "finds nothing when the source offers no criteria" $
       criterionFor TrackKind [] `shouldBe` Nothing
 
-  -- From what the device sent to what the scenario can play.
+  -- From what the device sent to what the scenario can play. A song is
+  -- played out of its album container, LIBALBUM-<album_id> on Tidal: the
+  -- SEARCHED_TRACKS-<query> container of the spec the MODEL 60n rejects
+  -- with "System error", and a bare album_id with "cannot play".
   describe "toFound" $ do
-    it "turns searched songs into tracks of the SEARCHED_TRACKS container" $ do
+    it "turns every searched song into a track of its LIBALBUM container" $ do
       results <- payloadOf "search_ok_computer.json" >>= decodeAs @[SearchResult]
-      let found = map (toFound (SourceId 10) "Ok Computer") results
+      let found = mapMaybe (toFound (SourceId 10)) results
       length found `shouldBe` 50
       map (.kind) found `shouldSatisfy` all (== "song")
-      let targets = [t | Found{target = Just t} <- found]
-      length targets `shouldBe` 50
-      targets `shouldSatisfy` all (\case PlayTrack (SourceId 10) (ContainerId "SEARCHED_TRACKS-Ok Computer") _ -> True; _ -> False)
       case found of
         f : _ -> do
           f.name `shouldBe` "ok computer"
           f.artist `shouldBe` Just "Sef"
-          f.target `shouldBe` Just (PlayTrack (SourceId 10) (ContainerId "SEARCHED_TRACKS-Ok Computer") (MediaId "443242295"))
+          f.target `shouldBe` PlayTrack (SourceId 10) (ContainerId "LIBALBUM-443242286") (MediaId "443242295")
         [] -> expectationFailure "no results"
 
     it "turns a container into PlayContainer with its cid" $ do
-      r <- either fail pure (eitherDecodeStrict @SearchResult "{\"container\": \"yes\", \"cid\": \"77\", \"type\": \"album\", \"playable\": \"yes\", \"name\": \"OK Computer\", \"image_url\": \"x\"}")
-      (toFound (SourceId 10) "q" r).target `shouldBe` Just (PlayContainer (SourceId 10) (ContainerId "77"))
+      r <- decodeResult "{\"container\": \"yes\", \"cid\": \"LIBALBUM-77\", \"type\": \"album\", \"playable\": \"yes\", \"name\": \"OK Computer\", \"image_url\": \"x\"}"
+      (.target) <$> toFound (SourceId 10) r `shouldBe` Just (PlayContainer (SourceId 10) (ContainerId "LIBALBUM-77"))
 
-    it "gives no target to an item the device marks unplayable" $ do
-      r <- either fail pure (eitherDecodeStrict @SearchResult "{\"container\": \"no\", \"mid\": \"5\", \"type\": \"song\", \"playable\": \"no\", \"name\": \"x\", \"image_url\": \"x\"}")
-      (toFound (SourceId 10) "q" r).target `shouldBe` Nothing
+    it "drops an item the device marks unplayable" $ do
+      r <- decodeResult "{\"container\": \"no\", \"mid\": \"5\", \"album_id\": \"7\", \"type\": \"song\", \"playable\": \"no\", \"name\": \"x\", \"image_url\": \"x\"}"
+      toFound (SourceId 10) r `shouldBe` Nothing
 
-    it "gives no target to a song without a mid" $ do
-      r <- either fail pure (eitherDecodeStrict @SearchResult "{\"container\": \"no\", \"type\": \"song\", \"playable\": \"yes\", \"name\": \"x\", \"image_url\": \"x\"}")
-      (toFound (SourceId 10) "q" r).target `shouldBe` Nothing
+    it "drops a song without a mid" $ do
+      r <- decodeResult "{\"container\": \"no\", \"album_id\": \"7\", \"type\": \"song\", \"playable\": \"yes\", \"name\": \"x\", \"image_url\": \"x\"}"
+      toFound (SourceId 10) r `shouldBe` Nothing
+
+    it "drops a song without an album_id: there is no container to play it from" $ do
+      r <- decodeResult "{\"container\": \"no\", \"mid\": \"5\", \"type\": \"song\", \"playable\": \"yes\", \"name\": \"x\", \"image_url\": \"x\"}"
+      toFound (SourceId 10) r `shouldBe` Nothing
+
+    it "drops a container without a cid" $ do
+      r <- decodeResult "{\"container\": \"yes\", \"type\": \"album\", \"playable\": \"yes\", \"name\": \"x\", \"image_url\": \"x\"}"
+      toFound (SourceId 10) r `shouldBe` Nothing
 
   -- Two spellings of yes in one protocol: search results say "yes"/"no",
   -- sources say "true"/"false". Each parser accepts only its own.
-  describe "YesNo and TrueFalse" $ do
-    it "YesNo rejects true/false" $
-      parseEither (parseJSON @YesNo) (String "true") `shouldSatisfy` isLeft
-    it "TrueFalse rejects yes/no" $
-      parseEither (parseJSON @TrueFalse) (String "yes") `shouldSatisfy` isLeft
+  describe "yesNo and trueFalse" $ do
+    it "yesNo reads yes and no" $
+      map (parseEither yesNo) ["yes", "no"] `shouldBe` [Right True, Right False]
+    it "yesNo rejects true/false" $
+      parseEither yesNo "true" `shouldSatisfy` isLeft
+    it "trueFalse reads true and false" $
+      map (parseEither trueFalse) ["true", "false"] `shouldBe` [Right True, Right False]
+    it "trueFalse rejects yes/no" $
+      parseEither trueFalse "yes" `shouldSatisfy` isLeft

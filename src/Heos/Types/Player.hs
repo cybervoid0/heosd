@@ -2,12 +2,11 @@
 --   itself, how it plays, and what it plays.
 module Heos.Types.Player where
 
-import Data.Aeson (FromJSON (parseJSON), genericParseJSON, withText)
+import Data.Aeson (FromJSON (parseJSON), withObject, withText, (.:), (.:?))
 import Data.List (find)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
-import Heos.Json (heosJson)
 import Heos.ToParam (ToParam (..))
 import Heos.Types.Browse (MediaId, SourceId)
 
@@ -39,8 +38,7 @@ data Player = Player
   , serial :: Text
   }
   deriving (Eq, Show, Generic)
-instance FromJSON Player where
-  parseJSON = genericParseJSON heosJson
+instance FromJSON Player
 
 data PlayState = Play | Pause | Stop deriving (Show, Eq, Enum, Bounded)
 instance ToParam PlayState where
@@ -65,17 +63,28 @@ instance ToParam QueueId where
   toParam (QueueId qid) = toParam qid
 
 data Track = Track
-  { _type :: Text
+  { trackType :: Text
   , song :: Text
   , station :: Maybe Text
   , album :: Text
   , artist :: Text
-  , image_url :: Text
-  , album_id :: Text
+  , imageUrl :: Text
+  , albumId :: Text
   , mid :: MediaId
   , qid :: QueueId
   , sid :: SourceId
   }
-  deriving (Show, Eq, Generic)
+  deriving (Show, Eq)
 instance FromJSON Track where
-  parseJSON = genericParseJSON heosJson
+  parseJSON = withObject "Track" $ \obj -> do
+    trackType <- obj .: "type"
+    song <- obj .: "song"
+    station <- obj .:? "station"
+    album <- obj .: "album"
+    artist <- obj .: "artist"
+    imageUrl <- obj .: "image_url"
+    albumId <- obj .: "album_id"
+    mid <- obj .: "mid"
+    qid <- obj .: "qid"
+    sid <- obj .: "sid"
+    pure $ Track{trackType, song, station, album, artist, imageUrl, albumId, mid, sid, qid}

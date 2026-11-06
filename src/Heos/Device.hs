@@ -6,6 +6,7 @@ import Control.Exception (handle)
 import Control.Monad (forM, forM_, forever)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
 import Heos.Command.Heos (Command (..))
@@ -33,6 +34,15 @@ data Catalogue = Catalogue
   , sources :: [MusicSource]
   , criteria :: Map SourceId [SearchCriterion]
   }
+
+searchable :: SearchKind -> Catalogue -> [SourceId]
+searchable kind cat =
+  [ s.sid
+  | s <- cat.sources
+  , s.available
+  , isJust s.serviceUsername
+  , isJust (Map.lookup s.sid cat.criteria >>= criterionFor kind)
+  ]
 
 -- | What the device is doing: read at start-up, kept current by 'tracker'.
 data LiveState = LiveState

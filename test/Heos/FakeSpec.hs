@@ -4,7 +4,6 @@ module Heos.FakeSpec (spec) where
 
 import Control.Exception (evaluate)
 import Control.Monad (replicateM_)
-import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Effectful (Eff, runPureEff, (:>))
 import Heos.Effect.Heos
@@ -25,13 +24,12 @@ tidal = SourceId 10
 playing :: (Heos :> es) => Eff es Text
 playing = maybe "" (.song) <$> getNowPlaying
 
--- | Первая играбельная цель из поиска.
+-- | Цель первого найденного: всё найденное можно играть.
 firstTarget :: (Heos :> es) => SearchKind -> Text -> Eff es Playable
-firstTarget kind query = do
-  found <- search tidal kind query
-  case mapMaybe (.target) found of
-    t : _ -> pure t
-    [] -> error ("nothing playable for " <> show query)
+firstTarget kind query =
+  search tidal kind query >>= \case
+    f : _ -> pure f.target
+    [] -> error ("nothing found for " <> show query)
 
 spec :: Spec
 spec = do
@@ -41,7 +39,7 @@ spec = do
 
     it "has Tidal available and TuneIn not" $ do
       let availability = [(s.name, s.available) | s <- run getSources, s.name `elem` ["Tidal", "TuneIn"]]
-      availability `shouldBe` [("TuneIn", TrueFalse False), ("Tidal", TrueFalse True)]
+      availability `shouldBe` [("TuneIn", False), ("Tidal", True)]
 
     it "starts on the first track of the queue, stopped" $
       run ((,) <$> playing <*> getPlayState) `shouldBe` ("Heaven's Gonna Burn Your Eyes", Stop)
@@ -80,21 +78,28 @@ spec = do
       run (playNext >> playNext >> playPrevious >> playing) `shouldBe` "Facing East"
 
   describe "search" $ do
+    -- The fake searches Tidal by track, album and artist (artists come back
+    -- empty, as on the device: they have no target), and has no playlists.
+    it "getSearchable names Tidal for tracks, albums and artists" $
+      map (run . getSearchable) [TrackKind, AlbumKind, ArtistKind] `shouldBe` [[tidal], [tidal], [tidal]]
+
+    it "getSearchable names no source for playlists" $
+      run (getSearchable PlaylistKind) `shouldBe` []
+
     it "finds a track by part of its name, case-insensitively" $ do
       let found = run (search tidal TrackKind "BLONDE")
       map (.name) found `shouldBe` ["Lebanese Blonde"]
       map (.kind) found `shouldBe` ["song"]
-      map (.target) found `shouldBe` [Just (PlayTrack tidal (ContainerId "SEARCHED_TRACKS-BLONDE") (MediaId "496097054"))]
+      map (.target) found `shouldBe` [PlayTrack tidal (ContainerId "SEARCHED_TRACKS-BLONDE") (MediaId "496097054")]
 
     it "finds an album once, not once per track" $ do
       let found = run (search tidal AlbumKind "mirror")
       map (.name) found `shouldBe` ["Mirror Conspiracy"]
-      map (.target) found `shouldBe` [Just (PlayContainer tidal (ContainerId "496097050"))]
+      map (.target) found `shouldBe` [PlayContainer tidal (ContainerId "496097050")]
 
-    it "finds an artist once, without a target" $ do
-      let found = run (search tidal ArtistKind "thievery")
-      map (.name) found `shouldBe` ["Thievery Corporation"]
-      map (.target) found `shouldBe` [Nothing]
+    -- Every Found can be played, so an artist, which cannot, is not a Found.
+    it "finds no artists: they have nothing to play" $
+      run (search tidal ArtistKind "thievery") `shouldBe` []
 
     it "does not match a song name when searching albums" $
       run (search tidal AlbumKind "blonde") `shouldBe` []

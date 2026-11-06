@@ -14,6 +14,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Effectful (Eff, IOE, runEff)
 import Heos.Connection.Avr (AvrConnection (..), AvrConnectionParams (..))
 import Heos.Connection.Heos (runConnection)
@@ -154,8 +155,18 @@ spec = describe "runHeosLife" $ do
       withLive replyTo (search (SourceId 10) TrackKind "x") `shouldThrow` isProtocolError
 
   describe "search" $ do
+    -- Which sources can take the search is known since start-up too: from
+    -- the recorded catalogue only Tidal is available, signed in and lists
+    -- the criteria; TuneIn listed none.
+    it "getSearchable answers from the catalogue, without asking the device" $ do
+      (sids, cmds) <- withLive replyTo ((,) <$> getSearchable TrackKind <*> getSearchable PlaylistKind)
+      sids `shouldBe` ([SourceId 10], [SourceId 10])
+      cmds `shouldBe` []
+
     -- The criteria are in the catalogue since start-up: the search goes
-    -- straight to the device with the matching scid.
+    -- straight to the device with the matching scid. A found song is played
+    -- out of its album container (LIBALBUM-<album_id> on Tidal): the
+    -- SEARCHED_TRACKS- container the spec describes the MODEL 60n rejects.
     it "searches with the scid from the catalogue and returns playable tracks" $ do
       results <- fixture "search_ok_computer.json"
       (found, cmds) <-
@@ -164,8 +175,8 @@ spec = describe "runHeosLife" $ do
           (search (SourceId 10) TrackKind "Ok Computer")
       sent cmds `shouldBe` [("browse/search", "sid=10&search=Ok Computer&scid=3")]
       length found `shouldBe` 50
-      [t | Found{target = Just t} <- found]
-        `shouldSatisfy` all (\case PlayTrack (SourceId 10) (ContainerId "SEARCHED_TRACKS-Ok Computer") _ -> True; _ -> False)
+      map (.target) found
+        `shouldSatisfy` all (\case PlayTrack (SourceId 10) (ContainerId cid) _ -> "LIBALBUM-" `T.isPrefixOf` cid; _ -> False)
 
     it "picks the scid the device gave for the kind, not a fixed number" $ do
       results <- fixture "search_ok_computer.json"

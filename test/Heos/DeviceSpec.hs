@@ -15,7 +15,8 @@ import Data.ByteString.Char8 qualified as BC
 import Data.Map.Strict qualified as Map
 import Heos.Connection.Heos (runConnection, subscribe)
 import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
-import Heos.Device (Catalogue (..), LiveState (..), initialize, tracker)
+import Data.Text (Text)
+import Heos.Device (Catalogue (..), LiveState (..), initialize, searchable, tracker)
 import Heos.Envelope.Heos (ProtocolError (..))
 import Heos.FakeDevice (answeringWith, commandPath, commandQuery, fixture, messageReply, scripted)
 import Heos.Time (Seconds (..))
@@ -109,8 +110,49 @@ awaitState state p =
   timeout 1000000 (atomically (readTVar state >>= \s -> check (p s) >> pure s))
     >>= maybe (fail "the live state did not change within a second") pure
 
+-- A catalogue made by hand: sources with the three things 'searchable'
+-- looks at, and the criteria the device listed for each.
+catalogueWith :: [MusicSource] -> [(SourceId, [SearchCriterion])] -> Catalogue
+catalogueWith sources criteria = Catalogue{players = [], sources, criteria = Map.fromList criteria}
+
+source :: Text -> Int -> Bool -> Maybe Text -> MusicSource
+source name n available serviceUsername =
+  MusicSource{name, imageUrl = "", sourceType = "music_service", sid = SourceId n, available, serviceUsername}
+
+criterion :: Text -> Int -> SearchCriterion
+criterion name n = SearchCriterion{name, scid = SearchCriteriaId n, wildcard = False, cid = Nothing, playable = Nothing}
+
+trackAndAlbum :: [SearchCriterion]
+trackAndAlbum = [criterion "Track" 3, criterion "Album" 2]
+
 spec :: Spec
 spec = do
+  -- Stage 31's first step: where can this kind of search go at all. Three
+  -- sieves, all from what the device said at start-up: the source is
+  -- available, someone is signed in, and it lists a criterion of the kind.
+  describe "searchable" $ do
+    let tidal = source "Tidal" 10 True (Just "listener@example.com")
+
+    it "lists a source that is available, signed in and searchable by the kind" $
+      searchable TrackKind (catalogueWith [tidal] [(SourceId 10, trackAndAlbum)]) `shouldBe` [SourceId 10]
+
+    it "leaves out a source that is not available" $
+      searchable TrackKind (catalogueWith [source "Deezer" 5 False (Just "x")] [(SourceId 5, trackAndAlbum)]) `shouldBe` []
+
+    it "leaves out a source nobody is signed in to" $
+      searchable TrackKind (catalogueWith [source "Qobuz" 30 True Nothing] [(SourceId 30, trackAndAlbum)]) `shouldBe` []
+
+    it "leaves out a source without a criterion of that kind" $
+      searchable PlaylistKind (catalogueWith [tidal] [(SourceId 10, trackAndAlbum)]) `shouldBe` []
+
+    it "leaves out a source the device listed no criteria for" $
+      searchable TrackKind (catalogueWith [tidal] []) `shouldBe` []
+
+    it "keeps the device's order when several qualify" $ do
+      let qobuz = source "Qobuz" 30 True (Just "someone")
+          both = [(SourceId 10, trackAndAlbum), (SourceId 30, trackAndAlbum)]
+      searchable AlbumKind (catalogueWith [qobuz, tidal] both) `shouldBe` [SourceId 30, SourceId 10]
+
   describe "initialize" $ do
     -- The order the vendor prescribes: events off first, so the state
     -- queries aren't interleaved with notifications; events on last.

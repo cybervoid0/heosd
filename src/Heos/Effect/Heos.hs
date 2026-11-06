@@ -18,6 +18,7 @@ data Heos :: Effect where
   ESetVolume :: Int -> Heos m ()
   ESetVolumeUp :: Int -> Heos m ()
   ESetVolumeDown :: Int -> Heos m ()
+  ESearchable :: SearchKind -> Heos m [SourceId]
   ESearch :: SourceId -> SearchKind -> Text -> Heos m [Found]
   EEnqueue :: QueueMode -> Playable -> Heos m ()
   EPlayNextTrack :: Heos m ()
@@ -50,6 +51,9 @@ volumeUp = send . ESetVolumeUp
 
 volumeDown :: (Heos :> es) => Int -> Eff es ()
 volumeDown = send . ESetVolumeDown
+
+getSearchable :: (Heos :> es) => SearchKind -> Eff es [SourceId]
+getSearchable = send . ESearchable
 
 search :: (Heos :> es) => SourceId -> SearchKind -> Text -> Eff es [Found]
 search sid sk = send . ESearch sid sk

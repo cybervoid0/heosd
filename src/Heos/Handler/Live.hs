@@ -4,12 +4,13 @@ import Control.Concurrent.STM (readTVarIO)
 import Control.Exception (throwIO)
 import Control.Monad (void)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (mapMaybe)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, MonadIO (liftIO), (:>))
 import Effectful.Dispatch.Dynamic (interpret_)
 import Heos.Command.Heos (Command (..))
 import Heos.Connection (HeosConnection (..), sendCommand)
-import Heos.Device (Catalogue (..), Device (..), LiveState (..))
+import Heos.Device (Catalogue (..), Device (..), LiveState (..), searchable)
 import Heos.Effect.Heos (Heos (..))
 import Heos.Envelope.Heos (ProtocolError (..), decodePayload)
 import Heos.Types
@@ -25,11 +26,12 @@ runHeosLive device = interpret_ $ \case
   ESetVolume vol -> liftIO $ vCall (SetVolume pid vol)
   ESetVolumeUp n -> liftIO $ vCall (VolumeUp pid n)
   ESetVolumeDown n -> liftIO $ vCall (VolumeDown pid n)
+  ESearchable kind -> pure . searchable kind $ device.catalogue
   ESearch sid kind txt -> liftIO $ do
     criteria <- orProtocol ("unknown source " <> T.pack (show sid)) (Map.lookup sid device.catalogue.criteria)
     scid <- orProtocol ("source has no " <> T.pack (show kind) <> " search") (criterionFor kind criteria)
     results <- call (Search sid txt scid Nothing) >>= decodePayload
-    pure (map (toFound sid txt) results)
+    pure . mapMaybe (toFound sid) $ results
   EEnqueue qm playable -> liftIO . vCall $ case playable of
     PlayTrack sid cid mid -> AddTrackToQueue pid sid cid mid qm
     PlayContainer sid cid -> AddContainerToQueue pid sid cid qm

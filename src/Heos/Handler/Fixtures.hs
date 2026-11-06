@@ -40,15 +40,15 @@ dummyQueue =
     , ("Air Batucada", mirrorConspiracy, "496097056")
     ]
  where
-  track qid (song, (album, album_id, image_url), mid) =
+  track qid (song, (album, albumId, imageUrl), mid) =
     Track
-      { _type = "song"
+      { trackType = "song"
       , song
       , station = Nothing
       , album
       , artist = "Thievery Corporation"
-      , image_url
-      , album_id
+      , imageUrl
+      , albumId
       , mid = MediaId mid
       , qid = QueueId qid
       , sid = SourceId 10 -- Tidal
@@ -76,7 +76,7 @@ dummySources :: [MusicSource]
 dummySources =
   [ service "TuneIn" 3 False
   , service "Deezer" 5 False
-  , (service "Tidal" 10 True){service_username = Just "listener@example.com"}
+  , (service "Tidal" 10 True){serviceUsername = Just "listener@example.com"}
   , service "SoundCloud" 9 False
   , service "Qobuz" 30 False
   , builtin "Local Music" "heos_server" 1024
@@ -91,11 +91,11 @@ dummySources =
   source name kind sid on =
     MusicSource
       { name
-      , image_url = "https://production.ws.skyegloup.com:443/media/images/service/logos/" <> logo name
-      , _type = kind
+      , imageUrl = "https://production.ws.skyegloup.com:443/media/images/service/logos/" <> logo name
+      , sourceType = kind
       , sid = SourceId sid
-      , available = TrueFalse on
-      , service_username = Nothing
+      , available = on
+      , serviceUsername = Nothing
       }
   logo = \case
     "Local Music" -> "musicsource_logo_servers.png"

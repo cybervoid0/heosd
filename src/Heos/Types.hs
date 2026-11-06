@@ -7,11 +7,11 @@ module Heos.Types (
   module Heos.Types.System,
   module Heos.Types.Player,
   module Heos.Types.Browse,
-  YesNo (..),
-  TrueFalse (..),
+  trueFalse,
+  yesNo,
 ) where
 
-import Heos.Json (TrueFalse (..), YesNo (..))
+import Heos.Json (trueFalse, yesNo)
 import Heos.Types.Browse
 import Heos.Types.Player
 import Heos.Types.System

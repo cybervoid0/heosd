@@ -19,7 +19,7 @@ import Heos.Types (
   Playable (..),
   QueueMode (..),
   SearchKind (..),
-  SourceId,
+  SourceId (..),
   Track (..),
  )
 
@@ -59,6 +59,7 @@ runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
   ESetVolume volume -> modify $ \s -> s{volume}
   ESetVolumeUp n -> modify $ \s -> s{volume = volClamp (s.volume + n)}
   ESetVolumeDown n -> modify $ \s -> s{volume = volClamp (s.volume - n)}
+  ESearchable kind -> pure [SourceId 10 | kind /= PlaylistKind]
   ESearch sid kind txt -> pure $ search sid txt kind
   EEnqueue qm playable -> enqueue qm playable
   EPlayNextTrack -> modify $ \s -> s{currentTrack = min (length s.queue - 1) (s.currentTrack + 1)}
@@ -80,7 +81,7 @@ runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
 tracksFor :: Playable -> [Track]
 tracksFor = \case
   PlayTrack _ _ mid -> filter (\t -> t.mid == mid) dummyQueue
-  PlayContainer _ (ContainerId cid) -> filter (\t -> t.album_id == cid) dummyQueue
+  PlayContainer _ (ContainerId cid) -> filter (\t -> t.albumId == cid) dummyQueue
 
 getNewQueue :: [a] -> Int -> [a] -> QueueMode -> (Int, [a])
 getNewQueue tracks curr queue = \case
@@ -94,8 +95,8 @@ getNewQueue tracks curr queue = \case
 search :: SourceId -> Text -> SearchKind -> [Found]
 search sid query kind = case kind of
   TrackKind -> map foundTrack (matching (.song))
-  AlbumKind -> map foundAlbum (nubBy ((==) `on` (.album_id)) (matching (.album)))
-  ArtistKind -> map foundArtist (nubBy ((==) `on` (.artist)) (matching (.artist)))
+  AlbumKind -> map foundAlbum (nubBy ((==) `on` (.albumId)) (matching (.album)))
+  ArtistKind -> []
   PlaylistKind -> [] -- плейлистов в каталоге нет
  where
   matching field = filter (\t -> T.toLower query `T.isInfixOf` T.toLower (field t)) dummyQueue
@@ -105,7 +106,7 @@ search sid query kind = case kind of
       , artist = Just t.artist
       , album = Just t.album
       , kind = "song"
-      , target = Just (PlayTrack sid (ContainerId ("SEARCHED_TRACKS-" <> query)) t.mid)
+      , target = PlayTrack sid (ContainerId ("LIBALBUM-" <> query)) t.mid
       }
   foundAlbum t =
     Found
@@ -113,13 +114,5 @@ search sid query kind = case kind of
       , artist = Just t.artist
       , album = Nothing
       , kind = "album"
-      , target = Just (PlayContainer sid (ContainerId t.album_id)) -- в подделке cid альбома = album_id
-      }
-  foundArtist t =
-    Found
-      { name = t.artist
-      , artist = Nothing
-      , album = Nothing
-      , kind = "artist"
-      , target = Nothing -- исполнителя целиком подделка не играет
+      , target = PlayContainer sid (ContainerId t.albumId) -- в подделке cid альбома = album_id
       }

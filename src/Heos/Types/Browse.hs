@@ -3,11 +3,10 @@
 --   or queued.
 module Heos.Types.Browse where
 
-import Data.Aeson (FromJSON (parseJSON), genericParseJSON)
+import Data.Aeson (FromJSON (parseJSON), withObject, (.:), (.:?))
 import Data.List (find)
 import Data.Text (Text)
-import GHC.Generics (Generic)
-import Heos.Json (TrueFalse, YesNo (..), heosJson)
+import Heos.Json (trueFalse, yesNo)
 import Heos.ToParam (ToParam (..))
 
 newtype SourceId = SourceId Int
@@ -52,29 +51,42 @@ data Playable
 
 data MusicSource = MusicSource
   { name :: Text
-  , image_url :: Text
-  , _type :: Text
+  , imageUrl :: Text
+  , sourceType :: Text
   , sid :: SourceId
-  , available :: TrueFalse
-  , service_username :: Maybe Text
+  , available :: Bool
+  , serviceUsername :: Maybe Text
   }
-  deriving (Eq, Show, Generic)
+  deriving (Eq, Show)
 instance FromJSON MusicSource where
-  parseJSON = genericParseJSON heosJson
+  parseJSON = withObject "MusicSource" $ \obj -> do
+    name <- obj .: "name"
+    imageUrl <- obj .: "image_url"
+    sourceType <- obj .: "type"
+    sid <- obj .: "sid"
+    available <- obj .: "available" >>= trueFalse
+    serviceUsername <- obj .:? "service_username"
+    pure $ MusicSource{name, imageUrl, sourceType, sid, available, serviceUsername}
 
 data SearchCriterion = SearchCriterion
   { name :: Text
   , scid :: SearchCriteriaId
-  , wildcard :: YesNo
+  , wildcard :: Bool
   , cid :: Maybe ContainerId
-  , playable :: Maybe YesNo
+  , playable :: Maybe Bool
   }
-  deriving (Eq, Show, Generic)
+  deriving (Eq, Show)
 instance FromJSON SearchCriterion where
-  parseJSON = genericParseJSON heosJson
+  parseJSON = withObject "SearchCriterion" $ \obj -> do
+    name <- obj .: "name"
+    scid <- obj .: "scid"
+    wildcard <- obj .: "wildcard" >>= yesNo
+    cid <- obj .:? "cid"
+    playable <- obj .:? "playable" >>= traverse yesNo
+    pure $ SearchCriterion{name, scid, wildcard, cid, playable}
 
 criterionFor :: SearchKind -> [SearchCriterion] -> Maybe SearchCriteriaId
-criterionFor kind = fmap (.scid) . find (\sc -> sc.name == wanted)
+criterionFor kind = ((.scid) <$>) . find (\sc -> sc.name == wanted)
  where
   wanted = case kind of
     ArtistKind -> "Artist"
@@ -83,36 +95,50 @@ criterionFor kind = fmap (.scid) . find (\sc -> sc.name == wanted)
     PlaylistKind -> "Playlist"
 
 data SearchResult = SearchResult
-  { container :: YesNo
+  { container :: Bool
   , mid :: Maybe MediaId
   , cid :: Maybe ContainerId
-  , _type :: Text
+  , resultType :: Text
   , artist :: Maybe Text
   , album :: Maybe Text
-  , album_id :: Maybe Text
-  , playable :: YesNo
+  , albumId :: Maybe Text
+  , playable :: Bool
   , name :: Text
-  , image_url :: Text
+  , imageUrl :: Text
   }
-  deriving (Eq, Show, Generic)
+  deriving (Eq, Show)
 instance FromJSON SearchResult where
-  parseJSON = genericParseJSON heosJson
+  parseJSON = withObject "SearchResult" $ \obj -> do
+    container <- obj .: "container" >>= yesNo
+    mid <- obj .:? "mid"
+    cid <- obj .:? "cid"
+    resultType <- obj .: "type"
+    artist <- obj .:? "artist"
+    album <- obj .:? "album"
+    albumId <- obj .:? "album_id"
+    playable <- obj .: "playable" >>= yesNo
+    name <- obj .: "name"
+    imageUrl <- obj .: "image_url"
+    pure $ SearchResult{container, mid, cid, resultType, artist, album, albumId, playable, name, imageUrl}
 
 data Found = Found
   { name :: Text
   , artist :: Maybe Text
   , album :: Maybe Text
   , kind :: Text
-  , target :: Maybe Playable -- Nothing, если playable = no
+  , target :: Playable -- Nothing, если playable = no
   }
   deriving (Show, Eq)
 
-toFound :: SourceId -> Text -> SearchResult -> Found
-toFound sid query r@(SearchResult{name, artist, album, _type}) = Found{name, artist, album, kind = _type, target}
- where
-  target = case (r.playable, r.container, r.cid, r.mid) of
-    (YesNo False, _, _, _) -> Nothing -- нельзя играть
-    (_, YesNo True, Just cid, _) -> Just (PlayContainer sid cid) -- альбом, плейлист
-    (_, YesNo False, _, Just mid) -> Just (PlayTrack sid searchedTracks mid)
+toFound :: SourceId -> SearchResult -> Maybe Found
+toFound sid r@(SearchResult{name, artist, album, resultType}) =
+  case (r.playable, r.container, r.cid, r.mid, r.albumId) of
+    (False, _, _, _, _) -> Nothing -- нельзя играть
+    (_, True, Just cid, _, _) -> pure $ found (PlayContainer sid cid) -- альбом, плейлист
+    (_, False, _, Just mid, Just aid) ->
+      -- TODO: префикс LIBALBUM работает только с Tidal. Установить префиксы для других сервисов
+      let cid = ContainerId ("LIBALBUM-" <> aid)
+       in pure $ found (PlayTrack sid cid mid)
     _ -> Nothing -- не хватает идентификатора
-  searchedTracks = ContainerId ("SEARCHED_TRACKS-" <> query)
+ where
+  found target = Found{name, artist, album, kind = resultType, target}
