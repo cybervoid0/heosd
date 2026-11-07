@@ -102,12 +102,12 @@ spec = describe "runHeosLife" $ do
       sent cmds `shouldBe` [("player/volume_up", "pid=1&step=2"), ("player/volume_down", "pid=1&step=3")]
 
     it "setPlayState renders the state" $ do
-      (_, cmds) <- withLive replyTo (setPlayState Pause)
+      (_, cmds) <- withLive replyTo pause
       sent cmds `shouldBe` [("player/set_play_state", "pid=1&state=pause")]
 
     -- Easy to swap, and nothing but a test would notice.
     it "playNext and playPrevious are not mixed up" $ do
-      (_, cmds) <- withLive replyTo (playNext >> playPrevious)
+      (_, cmds) <- withLive replyTo (next >> prev)
       map fst (sent cmds) `shouldBe` ["player/play_next", "player/play_previous"]
 
     it "enqueue of a track sends sid, cid, mid and the mode" $ do

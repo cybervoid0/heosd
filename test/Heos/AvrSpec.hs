@@ -1,6 +1,6 @@
 module Heos.AvrSpec (spec) where
 
-import Control.Concurrent.Async (concurrently, withAsync, wait)
+import Control.Concurrent.Async (concurrently, wait, withAsync)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO, stateTVar, writeTVar)
 import Control.Exception (IOException, bracket, try)
 import Control.Monad (forM_, unless)
@@ -11,7 +11,7 @@ import Data.Either (isLeft)
 import Effectful (runEff)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Connection.Avr (AvrConnection, AvrConnectionError (..), AvrConnectionParams (..), answerOf, sendAvrCommand, withAvr)
-import Heos.Effect.Avr (getPower, setPower)
+import Heos.Effect.Avr (getPower, turnOff)
 import Heos.Envelope.Avr (decodeAvrLine)
 import Heos.Handler.AvrLive (runAvrLive)
 import Heos.Time (Seconds (..))
@@ -187,7 +187,7 @@ spec = do
     it "runs getPower and setPower over the connection" $ do
       amp <- statefulAmp On
       (power, sent) <- withAmp (replyingWith amp) $ \conn ->
-        runEff . runAvrLive conn $ setPower Off >> getPower
+        runEff . runAvrLive conn $ turnOff >> getPower
       power `shouldBe` Off
       sent `shouldBe` ["PWSTANDBY", "PW?"]
  where

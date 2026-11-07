@@ -1,4 +1,27 @@
-module Heos.Effect.Heos where
+module Heos.Effect.Heos (
+  Heos (..),
+  getPlayers,
+  getSources,
+  getNowPlaying,
+  getVolume,
+  setVolume,
+  volumeUp,
+  volumeDown,
+  mute,
+  play,
+  stop,
+  pause,
+  next,
+  prev,
+  getPlayState,
+  getSearchable,
+  search,
+  enqueue,
+  showQueue,
+  clearQueue,
+  playItem,
+  playAll,
+) where
 
 import Control.Monad (forM_)
 import Data.Text (Text)
@@ -21,6 +44,8 @@ data Heos :: Effect where
   ESearchable :: SearchKind -> Heos m [SourceId]
   ESearch :: SourceId -> SearchKind -> Text -> Heos m [Found]
   EEnqueue :: QueueMode -> Playable -> Heos m ()
+  EShowQueue :: Heos m [QueueItem]
+  EClearQueue :: Heos m ()
   EPlayNextTrack :: Heos m ()
   EPlayPrevTrack :: Heos m ()
 
@@ -40,6 +65,8 @@ getVolume = send EGetVolume
 
 getPlayState :: (Heos :> es) => Eff es PlayState
 getPlayState = send EGetPlayState
+
+-- private
 setPlayState :: (Heos :> es) => PlayState -> Eff es ()
 setPlayState = send . ESetPlayState
 
@@ -52,6 +79,9 @@ volumeUp = send . ESetVolumeUp
 volumeDown :: (Heos :> es) => Int -> Eff es ()
 volumeDown = send . ESetVolumeDown
 
+mute :: (Heos :> es) => Eff es ()
+mute = setVolume 0
+
 getSearchable :: (Heos :> es) => SearchKind -> Eff es [SourceId]
 getSearchable = send . ESearchable
 
@@ -61,6 +91,12 @@ search sid sk = send . ESearch sid sk
 enqueue :: (Heos :> es) => QueueMode -> Playable -> Eff es ()
 enqueue qm = send . EEnqueue qm
 
+showQueue :: (Heos :> es) => Eff es [QueueItem]
+showQueue = send EShowQueue
+
+clearQueue :: (Heos :> es) => Eff es ()
+clearQueue = send EClearQueue
+
 playItem :: (Heos :> es) => Playable -> Eff es ()
 playItem = enqueue AddReplaceAndPlay
 
@@ -68,8 +104,17 @@ playAll :: (Heos :> es) => [Playable] -> Eff es ()
 playAll [] = pure ()
 playAll (x : xs) = playItem x >> forM_ xs (enqueue AddToEnd)
 
-playNext :: (Heos :> es) => Eff es ()
-playNext = send EPlayNextTrack
+play :: (Heos :> es) => Eff es ()
+play = setPlayState Play
 
-playPrevious :: (Heos :> es) => Eff es ()
-playPrevious = send EPlayPrevTrack
+stop :: (Heos :> es) => Eff es ()
+stop = setPlayState Stop
+
+pause :: (Heos :> es) => Eff es ()
+pause = setPlayState Pause
+
+next :: (Heos :> es) => Eff es ()
+next = send EPlayNextTrack
+
+prev :: (Heos :> es) => Eff es ()
+prev = send EPlayPrevTrack

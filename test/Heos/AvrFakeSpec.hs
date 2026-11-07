@@ -1,8 +1,8 @@
 module Heos.AvrFakeSpec (spec) where
 
 import Effectful (runPureEff)
-import Heos.Effect.Avr (getPower, setPower)
-import Heos.Effect.Heos (getPlayState, setPlayState)
+import Heos.Effect.Avr (getPower, turnOff, turnOn)
+import Heos.Effect.Heos (getPlayState, play)
 import Heos.Handler.AvrFake (runAvrFake)
 import Heos.Handler.Fake (runHeosFake)
 import Heos.Types (OnOff (..), PlayState (..))
@@ -17,15 +17,15 @@ spec = describe "runAvrFake" $ do
     runPureEff (runAvrFake getPower) `shouldBe` Off
 
   it "remembers the state it was switched to" $ do
-    runPureEff (runAvrFake (setPower On >> getPower)) `shouldBe` On
-    runPureEff (runAvrFake (setPower On >> setPower Off >> getPower)) `shouldBe` Off
+    runPureEff (runAvrFake (turnOn >> getPower)) `shouldBe` On
+    runPureEff (runAvrFake (turnOn >> turnOff >> getPower)) `shouldBe` Off
 
   it "keeps the state to one run" $ do
-    runPureEff (runAvrFake (setPower On)) `shouldBe` ()
+    runPureEff (runAvrFake turnOn) `shouldBe` ()
     runPureEff (runAvrFake getPower) `shouldBe` Off
 
   -- Both fakes stack like the live handlers do: a scenario that wakes the
   -- amplifier and starts playback is pure.
   it "stacks with the HEOS fake" $
-    runPureEff (runAvrFake (runHeosFake (setPower On >> setPlayState Play >> (,) <$> getPower <*> getPlayState)))
+    runPureEff (runAvrFake (runHeosFake (turnOn >> play >> (,) <$> getPower <*> getPlayState)))
       `shouldBe` (On, Play)

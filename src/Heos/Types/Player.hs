@@ -88,3 +88,23 @@ instance FromJSON Track where
     qid <- obj .: "qid"
     sid <- obj .: "sid"
     pure $ Track{trackType, song, station, album, artist, imageUrl, albumId, mid, sid, qid}
+data QueueItem = QueueItem
+  { song :: Text
+  , album :: Text
+  , artist :: Text
+  , imageUrl :: Text
+  , qid :: QueueId
+  , mid :: MediaId
+  , albumId :: Text
+  }
+  deriving (Show, Eq)
+instance FromJSON QueueItem where
+  parseJSON = withObject "QueueItem" $ \obj -> do
+    song <- obj .: "song"
+    album <- obj .: "album"
+    artist <- obj .: "artist"
+    imageUrl <- obj .: "image_url"
+    qid <- obj .: "qid"
+    mid <- obj .: "mid"
+    albumId <- obj .: "album_id"
+    pure $ QueueItem{song, album, artist, imageUrl, qid, mid, albumId}

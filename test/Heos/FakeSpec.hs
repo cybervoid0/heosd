@@ -62,20 +62,20 @@ spec = do
 
   describe "play state" $ do
     it "remembers what was set" $
-      run (setPlayState Play >> getPlayState) `shouldBe` Play
+      run (play >> getPlayState) `shouldBe` Play
 
   describe "walking the queue" $ do
     it "playNext moves to the second track" $
-      run (playNext >> playing) `shouldBe` "Facing East"
+      run (next >> playing) `shouldBe` "Facing East"
 
     it "playPrevious at the start stays on the first track" $
-      run (playPrevious >> playing) `shouldBe` "Heaven's Gonna Burn Your Eyes"
+      run (prev >> playing) `shouldBe` "Heaven's Gonna Burn Your Eyes"
 
     it "playNext past the end stays on the last track" $
-      run (replicateM_ 20 playNext >> playing) `shouldBe` "Air Batucada"
+      run (replicateM_ 20 next >> playing) `shouldBe` "Air Batucada"
 
     it "playPrevious after playNext comes back" $
-      run (playNext >> playNext >> playPrevious >> playing) `shouldBe` "Facing East"
+      run (next >> next >> prev >> playing) `shouldBe` "Facing East"
 
   describe "search" $ do
     -- The fake searches Tidal by track, album and artist (artists come back
@@ -90,7 +90,7 @@ spec = do
       let found = run (search tidal TrackKind "BLONDE")
       map (.name) found `shouldBe` ["Lebanese Blonde"]
       map (.kind) found `shouldBe` ["song"]
-      map (.target) found `shouldBe` [PlayTrack tidal (ContainerId "SEARCHED_TRACKS-BLONDE") (MediaId "496097054")]
+      map (.target) found `shouldBe` [PlayTrack tidal (ContainerId "LIBALBUM-BLONDE") (MediaId "496097054")]
 
     it "finds an album once, not once per track" $ do
       let found = run (search tidal AlbumKind "mirror")
@@ -115,9 +115,9 @@ spec = do
       let names = run $ do
             firstTarget AlbumKind "mirror" >>= playItem
             a <- playing
-            playNext
+            next
             b <- playing
-            replicateM_ 10 playNext
+            replicateM_ 10 next
             c <- playing
             pure [a, b, c]
       names `shouldBe` ["Treasures", "Lebanese Blonde", "Air Batucada"]
@@ -126,7 +126,7 @@ spec = do
       run (firstTarget TrackKind "blonde" >>= enqueue AddToEnd >> playing) `shouldBe` "Heaven's Gonna Burn Your Eyes"
 
     it "AddPlayNext puts the track right after the current one" $
-      run (firstTarget TrackKind "blonde" >>= enqueue AddPlayNext >> playNext >> playing) `shouldBe` "Lebanese Blonde"
+      run (firstTarget TrackKind "blonde" >>= enqueue AddPlayNext >> next >> playing) `shouldBe` "Lebanese Blonde"
 
     it "AddPlayNow puts the track in place of the current one" $
       run (firstTarget TrackKind "omid" >>= enqueue AddPlayNow >> playing) `shouldBe` "Omid"
@@ -137,7 +137,7 @@ spec = do
             richest <- firstTarget AlbumKind "richest"
             playAll [blonde, richest]
             a <- playing
-            playNext
+            next
             b <- playing
             pure [a, b]
       names `shouldBe` ["Lebanese Blonde", "Heaven's Gonna Burn Your Eyes"]

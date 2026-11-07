@@ -12,16 +12,7 @@ import Effectful.State.Static.Local (evalState, gets, modify)
 import Heos.Effect.Heos (Heos (..))
 import Heos.Envelope.Heos (ProtocolError (..))
 import Heos.Handler.Fixtures (defaultPlayer, dummyQueue, dummySources)
-import Heos.Types (
-  ContainerId (..),
-  Found (..),
-  PlayState (..),
-  Playable (..),
-  QueueMode (..),
-  SearchKind (..),
-  SourceId (..),
-  Track (..),
- )
+import Heos.Types
 
 {- handler backed by recorded responses -}
 {-
@@ -62,6 +53,8 @@ runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
   ESearchable kind -> pure [SourceId 10 | kind /= PlaylistKind]
   ESearch sid kind txt -> pure $ search sid txt kind
   EEnqueue qm playable -> enqueue qm playable
+  EClearQueue -> modify $ \s -> s{queue = []}
+  EShowQueue -> map (\t -> QueueItem{song = t.song, album = t.album, artist = t.artist, imageUrl = t.imageUrl, qid = t.qid, mid = t.mid, albumId = t.albumId}) <$> gets @FakeState (.queue)
   EPlayNextTrack -> modify $ \s -> s{currentTrack = min (length s.queue - 1) (s.currentTrack + 1)}
   EPlayPrevTrack -> modify $ \s -> s{currentTrack = max 0 (s.currentTrack - 1)}
  where

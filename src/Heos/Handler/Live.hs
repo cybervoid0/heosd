@@ -35,6 +35,9 @@ runHeosLive device = interpret_ $ \case
   EEnqueue qm playable -> liftIO . vCall $ case playable of
     PlayTrack sid cid mid -> AddTrackToQueue pid sid cid mid qm
     PlayContainer sid cid -> AddContainerToQueue pid sid cid qm
+  -- `Nothing` means returning all elements of the queue (up to 100)
+  EShowQueue -> liftIO $ call (GetQueue pid Nothing) >>= decodePayload
+  EClearQueue -> liftIO $ vCall (ClearQueue pid)
   EPlayNextTrack -> liftIO $ vCall (PlayNext pid)
   EPlayPrevTrack -> liftIO $ vCall (PlayPrevious pid)
  where

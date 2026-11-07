@@ -27,26 +27,30 @@ remote = do
         go
       line -> fromMaybe (liftIO $ putStrLn help) (lookup line keys) >> go
   printFound = putStrLn . T.unpack . formatFound
+  printRes key = liftIO . putStrLn . ((key <> ": ") <>) . show
   keys =
-    [ ("off", setPower Off)
-    , ("on", setPower On)
+    [ ("off", turnOff)
+    , ("on", turnOn)
     , ("+", volumeUp 1)
     , ("-", volumeDown 1)
-    , (">", setPlayState Play)
-    , ("||", setPlayState Pause)
-    , (">>", playNext)
-    , ("<<", playPrevious)
-    , ("ps", getPlayState >>= liftIO . putStrLn . ("State: " <>) . show)
-    , ("v", getVolume >>= liftIO . putStrLn . ("Volume: " <>) . show)
+    , (">", play)
+    , ("||", pause)
+    , ("[]", stop)
+    , (">>", next)
+    , ("<<", prev)
+    , ("ps", getPlayState >>= printRes "State")
+    , ("v", getVolume >>= printRes "Volume")
     ,
       ( "np"
       , getNowPlaying >>= \case
-          Just track -> liftIO . putStrLn . ("Playing: " <>) . show $ track
+          Just track -> printRes "Playing" track
           Nothing -> liftIO . putStrLn $ "The player is idle"
       )
-    , ("ms", getSources >>= liftIO . putStrLn . ("Music Sources: " <>) . show)
+    , ("ms", getSources >>= printRes "Music Sources")
+    , ("que", showQueue >>= printRes "Queue")
     ]
-  help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ ms (music sources) ‧ s <query> (search) ‧ fp (find & play) ‧ q (quit)"
+
+  help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ ms (music sources) ‧ s <query> (search) ‧ fp <query> (find & play) ‧ que (tracks queue) ‧ q (quit)"
 
 formatFound :: Found -> Text
 formatFound f = T.intercalate " ‧ " . map joinPair $ table
