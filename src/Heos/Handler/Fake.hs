@@ -1,16 +1,13 @@
 module Heos.Handler.Fake where
 
-import Control.Monad (when)
 import Data.Function (on)
 import Data.List (nubBy, (!?))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful (Eff)
 import Effectful.Dispatch.Dynamic (reinterpret_)
-import Effectful.Exception (throwIO)
 import Effectful.State.Static.Local (evalState, gets, modify)
 import Heos.Effect.Heos (Heos (..))
-import Heos.Envelope.Heos (ProtocolError (..))
 import Heos.Handler.Fixtures (defaultPlayer, dummyQueue, dummySources)
 import Heos.Types
 
@@ -24,6 +21,7 @@ so a day of real use turns into a set of test scenarios from life.
 
 data FakeState = FakeState
   { volume :: Int
+  , muted :: Bool
   , currentTrack :: Int
   , queue :: [Track]
   , playState :: PlayState
@@ -34,6 +32,7 @@ defaultFakeState :: FakeState
 defaultFakeState =
   FakeState
     { volume = 10
+    , muted = False
     , currentTrack = 0
     , queue = dummyQueue
     , playState = Stop
@@ -45,6 +44,7 @@ runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
   EGetSources -> pure dummySources
   EGetNowPlaying -> getNowPlaying
   EGetVolume -> gets @FakeState (.volume)
+  EMute -> modify $ \s -> s{muted = not s.muted}
   EGetPlayState -> gets @FakeState (.playState)
   ESetPlayState ps -> modify $ \s -> s{playState = ps}
   ESetVolume volume -> modify $ \s -> s{volume}
@@ -53,7 +53,7 @@ runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
   ESearchable kind -> pure [SourceId 10 | kind /= PlaylistKind]
   ESearch sid kind txt -> pure $ search sid txt kind
   EEnqueue qm playable -> enqueue qm playable
-  EClearQueue -> modify $ \s -> s{queue = []}
+  EClearQueue -> modify $ \s -> s{queue = [], playState = Stop}
   EShowQueue -> map (\t -> QueueItem{song = t.song, album = t.album, artist = t.artist, imageUrl = t.imageUrl, qid = t.qid, mid = t.mid, albumId = t.albumId}) <$> gets @FakeState (.queue)
   EPlayNextTrack -> modify $ \s -> s{currentTrack = min (length s.queue - 1) (s.currentTrack + 1)}
   EPlayPrevTrack -> modify $ \s -> s{currentTrack = max 0 (s.currentTrack - 1)}
@@ -67,7 +67,6 @@ runHeosFake = reinterpret_ (evalState defaultFakeState) $ \case
     modify $ \s -> s{queue = newQueue, currentTrack = newCurr, playState = Play}
   getNowPlaying = do
     queue <- gets @FakeState (.queue)
-    when (null queue) $ throwIO (ProtocolError "queue is empty")
     currTrack <- gets @FakeState (.currentTrack)
     pure $ queue !? currTrack
 

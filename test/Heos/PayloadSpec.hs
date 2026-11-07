@@ -105,6 +105,25 @@ spec = do
       r.album `shouldBe` Nothing
       r.albumId `shouldBe` Nothing
 
+  -- A queue item is thinner than now_playing_media: no type, no sid, no
+  -- station. The fixture is the recorded queue of 75 Tidal tracks.
+  describe "QueueItem" $ do
+    it "decodes every item of the recorded queue" $ do
+      items <- payloadOf "get_queue.json" >>= decodeAs @[QueueItem]
+      length items `shouldBe` 75
+      map (.qid) (take 3 items) `shouldBe` map QueueId [1, 2, 3]
+
+    it "keeps what the device sends: song, album, artist, ids" $ do
+      items <- payloadOf "get_queue.json" >>= decodeAs @[QueueItem]
+      case items of
+        i : _ -> do
+          i.song `shouldBe` "Heaven's Gonna Burn Your Eyes"
+          i.album `shouldBe` "The Richest Man In Babylon"
+          i.artist `shouldBe` "Thievery Corporation"
+          i.mid `shouldBe` MediaId "496328267"
+          i.albumId `shouldBe` "496328266"
+        [] -> expectationFailure "empty queue"
+
   -- The criteria are per source: the device says which scid means what.
   describe "criterionFor" $ do
     it "finds the scid of each kind in the Tidal criteria reply" $ do

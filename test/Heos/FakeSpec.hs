@@ -2,12 +2,10 @@
 -- Всё чисто: `runPureEff`, ни одного сокета.
 module Heos.FakeSpec (spec) where
 
-import Control.Exception (evaluate)
 import Control.Monad (replicateM_)
 import Data.Text (Text)
 import Effectful (Eff, runPureEff, (:>))
 import Heos.Effect.Heos
-import Heos.Envelope.Heos (ProtocolError (..))
 import Heos.Handler.Fake (runHeosFake)
 import Heos.Types
 import Test.Hspec
@@ -60,9 +58,37 @@ spec = do
     it "never drops below 0" $
       run (volumeDown 20 >> getVolume) `shouldBe` 0
 
+    -- Mute is its own switch on the device: the level stays what it was,
+    -- and get_volume keeps reporting it.
+    it "mute does not touch the volume" $
+      run (setVolume 42 >> mute >> getVolume) `shouldBe` 42
+
+    it "mute twice is back where it started" $
+      run (mute >> mute >> getVolume) `shouldBe` 10
+
   describe "play state" $ do
     it "remembers what was set" $
       run (play >> getPlayState) `shouldBe` Play
+
+    it "pause and stop are told apart" $
+      run ((,) <$> (play >> pause >> getPlayState) <*> (stop >> getPlayState)) `shouldBe` (Pause, Stop)
+
+  -- The fake starts with ten tracks of two albums; showQueue shows them
+  -- as the device would, item by item, with the queue positions.
+  describe "queue" $ do
+    it "showQueue lists the whole queue in order" $ do
+      let items = run showQueue
+      length items `shouldBe` 10
+      map (.song) (take 3 items) `shouldBe` ["Heaven's Gonna Burn Your Eyes", "Facing East", "The Outernationalist"]
+
+    it "showQueue carries the ids the device uses to address an item" $
+      [(i.qid, i.mid, i.albumId) | i <- take 1 (run showQueue)] `shouldBe` [(QueueId 1, MediaId "496328267", "496328266")]
+
+    it "showQueue follows what was enqueued" $
+      map (.song) (run (firstTarget TrackKind "blonde" >>= playItem >> showQueue)) `shouldBe` ["Lebanese Blonde"]
+
+    it "clearQueue leaves nothing to show, nothing playing, and stops" $
+      run (play >> clearQueue >> (,,) <$> showQueue <*> getNowPlaying <*> getPlayState) `shouldBe` ([], Nothing, Stop)
 
   describe "walking the queue" $ do
     it "playNext moves to the second track" $
@@ -145,6 +171,5 @@ spec = do
     it "playItem starts playback" $
       run (firstTarget TrackKind "blonde" >>= playItem >> getPlayState) `shouldBe` Play
 
-    it "playing an unknown track empties the queue and getNowPlaying fails" $
-      evaluate (run (playItem (PlayTrack tidal (ContainerId "x") (MediaId "no-such")) >> playing))
-        `shouldThrow` \(ProtocolError _) -> True
+    it "playing an unknown track empties the queue: nothing plays" $
+      run (playItem (PlayTrack tidal (ContainerId "x") (MediaId "no-such")) >> getNowPlaying) `shouldBe` Nothing

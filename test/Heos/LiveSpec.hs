@@ -101,9 +101,19 @@ spec = describe "runHeosLife" $ do
       (_, cmds) <- withLive replyTo (volumeUp 2 >> volumeDown 3)
       sent cmds `shouldBe` [("player/volume_up", "pid=1&step=2"), ("player/volume_down", "pid=1&step=3")]
 
-    it "setPlayState renders the state" $ do
-      (_, cmds) <- withLive replyTo pause
-      sent cmds `shouldBe` [("player/set_play_state", "pid=1&state=pause")]
+    it "play, pause and stop render the state" $ do
+      (_, cmds) <- withLive replyTo (play >> pause >> stop)
+      sent cmds `shouldBe` [("player/set_play_state", "pid=1&state=play"), ("player/set_play_state", "pid=1&state=pause"), ("player/set_play_state", "pid=1&state=stop")]
+
+    -- Mute is a switch of its own on the device, not volume 0: the level
+    -- survives it, and the device toggles it in one command.
+    it "mute becomes player/toggle_mute, and does not set the volume" $ do
+      (_, cmds) <- withLive replyTo mute
+      sent cmds `shouldBe` [("player/toggle_mute", "pid=1")]
+
+    it "clearQueue becomes player/clear_queue for the configured player" $ do
+      (_, cmds) <- withLive replyTo clearQueue
+      sent cmds `shouldBe` [("player/clear_queue", "pid=1")]
 
     -- Easy to swap, and nothing but a test would notice.
     it "playNext and playPrevious are not mixed up" $ do
@@ -123,6 +133,20 @@ spec = describe "runHeosLife" $ do
       let item n = PlayContainer (SourceId 10) (ContainerId n)
       (_, cmds) <- withLive replyTo (playAll [item "a", item "b", item "c"])
       map snd (sent cmds) `shouldBe` ["pid=1&sid=10&cid=a&aid=4", "pid=1&sid=10&cid=b&aid=3", "pid=1&sid=10&cid=c&aid=3"]
+
+  -- The queue is not cached: each look asks the device, and the whole
+  -- queue comes back (no range), decoded from what the device sends.
+  describe "queue" $ do
+    it "showQueue asks the device for the whole queue and decodes it" $ do
+      queue <- fixture "get_queue.json"
+      (items, cmds) <- withLive (scripted [("player/get_queue", queue)]) showQueue
+      sent cmds `shouldBe` [("player/get_queue", "pid=1")]
+      length items `shouldBe` 75
+      map (.song) (take 2 items) `shouldBe` ["Heaven's Gonna Burn Your Eyes", "Facing East"]
+      map (.qid) (take 2 items) `shouldBe` [QueueId 1, QueueId 2]
+
+    it "a queue reply without payload is a ProtocolError" $
+      withLive replyTo showQueue `shouldThrow` isProtocolError
 
   -- Stage 30's check: "what plays" is answered at once, from the cache the
   -- tracker keeps, and the device is not asked.

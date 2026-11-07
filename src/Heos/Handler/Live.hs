@@ -26,6 +26,7 @@ runHeosLive device = interpret_ $ \case
   ESetVolume vol -> liftIO $ vCall (SetVolume pid vol)
   ESetVolumeUp n -> liftIO $ vCall (VolumeUp pid n)
   ESetVolumeDown n -> liftIO $ vCall (VolumeDown pid n)
+  EMute -> liftIO $ vCall (ToggleMute pid)
   ESearchable kind -> pure . searchable kind $ device.catalogue
   ESearch sid kind txt -> liftIO $ do
     criteria <- orProtocol ("unknown source " <> T.pack (show sid)) (Map.lookup sid device.catalogue.criteria)
