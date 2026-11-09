@@ -5,21 +5,21 @@ import Control.Concurrent.Async (concurrently, withAsync)
 import Control.Concurrent.STM (TChan, TVar, atomically, check, modifyTVar', newTVarIO, readTChan, readTVar, readTVarIO)
 import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forever)
+import Control.Retry (constantDelay)
 import Data.ByteString (ByteString)
-import Data.Maybe (isNothing)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
+import Data.Map.Strict qualified as Map
+import Data.Maybe (isNothing)
 import Data.Text.Encoding qualified as T
 import Heos.Command.Heos (Command (..))
-import Heos.Types
-import Data.Map.Strict qualified as Map
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
-import Control.Retry (constantDelay)
 import Heos.Connection.Heos (findBox, readPid, runConnection, sendCommand, subscribe)
 import Heos.Connection.Types (ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
+import Heos.Envelope.Heos (HeosEvent (..), ProtocolError (..))
 import Heos.FakeDevice (answering, answeringWith, commandPath, fixture, scripted)
 import Heos.Time (Seconds (..))
-import Heos.Envelope.Heos (Envelope (..), HeosEvent (..), HeosHeader (..), HeosResult (..))
+import Heos.Types
 import Heos.Url (decodeQuery)
 import Network.Socket (Family (AF_UNIX), HostAddress, Socket, SocketType (Stream), close, socketPair, tupleToHostAddress)
 import Network.Socket.ByteString (recv, sendAll)
@@ -78,9 +78,14 @@ nextEvent ch =
   timeout 1000000 (atomically (readTChan ch))
     >>= maybe (fail "no event arrived within a second") pure
 
+-- The recorded player, whole: GetPlayers decodes its reply into [Player].
 getPlayersLine :: ByteString
 getPlayersLine =
-  "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"success\", \"message\": \"\"}, \"payload\": [{\"name\": \"Marantz MODEL 60n\", \"pid\": -1245882071}]}\r\n"
+  "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"success\", \"message\": \"\"}, \"payload\": [{\"name\": \"Marantz MODEL 60n\", \"pid\": -1245882071, \"model\": \"Marantz MODEL 60n\", \"version\": \"3.139.173\", \"ip\": \"192.168.1.241\", \"network\": \"wifi\", \"lineout\": 0, \"serial\": \"MCQJ072400069\"}]}\r\n"
+
+-- The pid in getPlayersLine.
+model60n :: PlayerId
+model60n = PlayerId (-1245882071)
 
 noPlayersLine :: ByteString
 noPlayersLine =
@@ -100,9 +105,9 @@ failedLine =
 
 -- Send a command and, from the device's side of the socket pair, answer it:
 -- wait for the command line, hand it to the check, then write the replies.
--- Returns the reply sendCommand came back with. Bounded, so a lost reply
--- fails the test instead of hanging it.
-exchange :: HeosConnection -> Socket -> Command -> (ByteString -> IO ()) -> [ByteString] -> IO Envelope
+-- Returns what sendCommand came back with: the reply, decoded for the
+-- command. Bounded, so a lost reply fails the test instead of hanging it.
+exchange :: HeosConnection -> Socket -> Command a -> (ByteString -> IO ()) -> [ByteString] -> IO a
 exchange conn theirs cmd inspect replies = do
   (reply, ()) <-
     concurrently
@@ -262,35 +267,39 @@ spec = do
         timeout 2000000 stuck `shouldThrow` (== ConnectionLost)
 
   describe "sendCommand" $ do
-    it "sends the rendered command with its SEQUENCE and returns the reply" $
+    it "sends the rendered command with its SEQUENCE and returns the decoded reply" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn -> do
           reply <-
-            exchange conn theirs GetPlayers
-              (\sent -> do
-                 sent `shouldSatisfy` BS.isPrefixOf "heos://player/get_players?"
-                 sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=0"
-                 sent `shouldSatisfy` BS.isSuffixOf "\r\n")
+            exchange
+              conn
+              theirs
+              GetPlayers
+              ( \sent -> do
+                  sent `shouldSatisfy` BS.isPrefixOf "heos://player/get_players?"
+                  sent `shouldSatisfy` BS.isInfixOf "SEQUENCE=0"
+                  sent `shouldSatisfy` BS.isSuffixOf "\r\n"
+              )
               [getPlayersLine]
-          reply.heos.command `shouldBe` "player/get_players"
-          reply.heos.result `shouldBe` Just Success
+          map (.pid) reply `shouldBe` [model60n]
 
     -- The trap from stage 7: "command under process" is not the reply.
     it "waits through a 'command under process' notice for the real reply" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn -> do
           reply <- exchange conn theirs GetPlayers (const (pure ())) [pendingLine, getPlayersLine]
-          reply.heos.command `shouldBe` "player/get_players"
-          reply.heos.message `shouldBe` Just ""
+          map (.pid) reply `shouldBe` [model60n]
 
-    -- A failed result is still the reply to this command; judging it is the
-    -- caller's job.
-    it "returns a failed reply as the reply, not as an error" $
+    -- A failed result has no payload, so a command that expects one cannot
+    -- be decoded: today that surfaces as a ProtocolError. The device's own
+    -- eid and text are lost on the way; the HeosError task will keep them.
+    it "a failed reply to a command expecting a payload is an error, not a value" $
       withSocketPair $ \(ours, theirs) ->
-        run ours $ \conn -> do
-          reply <- exchange conn theirs GetPlayers (const (pure ())) [failedLine]
-          reply.heos.result `shouldBe` Just Fail
-          reply.heos.message `shouldBe` Just "eid=2&text=ID Not Valid"
+        run ours $ \conn ->
+          exchange conn theirs GetPlayers (const (pure ())) [failedLine] `shouldThrow` \(ProtocolError _) -> True
+
+    it "a failed reply carries the device's eid and text" $
+      pendingWith "HeosError as an exception: a fail reply to a command without result is still swallowed"
 
     it "nothing is in flight before a command and after its reply" $
       withSocketPair $ \(ours, theirs) ->
@@ -312,9 +321,9 @@ spec = do
     it "drops a reply with a SEQUENCE nobody is waiting for" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn -> do
-          let late = "{\"heos\": {\"command\": \"player/get_volume\", \"result\": \"success\", \"message\": \"pid=1&level=10&SEQUENCE=99\"}}\r\n"
+          let late = "{\"heos\": {\"command\": \"player/get_volume\", \"result\": \"success\", \"message\": \"pid=1&level=99&SEQUENCE=99\"}}\r\n"
           answer <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [late, volumeReply 0]
-          answer.heos.message `shouldBe` Just "pid=1&level=10&SEQUENCE=0"
+          answer `shouldBe` 10
 
     -- Stage 19: whoever gives up waiting (a timeout, a cancelled thread)
     -- must leave nothing behind, or a late reply would find a box nobody
@@ -332,22 +341,25 @@ spec = do
           _ <- timeout 100000 (sendCommand conn HeartBeat)
           _ <- recv theirs 4096 -- the device swallows the abandoned command
           answer <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
-          answer.heos.command `shouldBe` "player/get_players"
+          map (.pid) answer `shouldBe` [model60n]
 
     -- The lock serialises commands, so two concurrent sendCommand calls
     -- still reach the device one at a time, and each gets its own reply.
     it "serialises concurrent commands and gives each its own reply" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn -> do
-          let bounded cmd = timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") pure
+          -- GADTs switch on MonoLocalBinds: a local that closes over conn is
+          -- not generalised, so the signature keeps it usable at two types
+          let bounded :: Command a -> IO a
+              bounded cmd = timeout 1000000 (sendCommand conn cmd) >>= maybe (fail "no reply within a second") pure
               device = do
                 first' <- recv theirs 4096
                 sendAll theirs (if "heart_beat" `BS.isInfixOf` first' then heartBeatLine else getPlayersLine)
                 second <- recv theirs 4096
                 sendAll theirs (if "heart_beat" `BS.isInfixOf` second then heartBeatLine else getPlayersLine)
           ((a, b), ()) <- concurrently (concurrently (bounded HeartBeat) (bounded GetPlayers)) device
-          a.heos.command `shouldBe` "system/heart_beat"
-          b.heos.command `shouldBe` "player/get_players"
+          a `shouldBe` ()
+          map (.pid) b `shouldBe` [model60n]
           inFlight conn `shouldReturn` 0
 
     -- A reply nobody asked for must not be kept for the next command.
@@ -357,17 +369,21 @@ spec = do
         run ours $ \conn -> do
           sendAll theirs getPlayersLine
           threadDelay 100000
-          reply <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
-          reply.heos.command `shouldBe` "system/heart_beat"
+          reply <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 0]
+          reply `shouldBe` 10
 
     it "still delivers events that arrive while a command is waiting" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn -> do
           ch <- subscribe conn
           reply <-
-            exchange conn theirs GetPlayers (const (pure ()))
+            exchange
+              conn
+              theirs
+              GetPlayers
+              (const (pure ()))
               [eventLine "player_volume_changed" "pid=1&level=3", getPlayersLine]
-          reply.heos.command `shouldBe` "player/get_players"
+          map (.pid) reply `shouldBe` [model60n]
           nextEvent ch `shouldReturn` volumeEvent "3"
 
     it "serves two commands one after another" $
@@ -375,8 +391,8 @@ spec = do
         run ours $ \conn -> do
           first' <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
           second <- exchange conn theirs HeartBeat (const (pure ())) [heartBeatLine]
-          first'.heos.command `shouldBe` "player/get_players"
-          second.heos.command `shouldBe` "system/heart_beat"
+          map (.pid) first' `shouldBe` [model60n]
+          second `shouldBe` ()
 
   -- Stage 20. The waiters here run in threads of their own, outside the
   -- race inside runConnection, the way heartbeat and MCP handlers will:
@@ -438,7 +454,7 @@ spec = do
           sendAll theirs heartBeatLine -- ...and answers it, too late
           threadDelay 50000
           answer <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
-          answer.heos.command `shouldBe` "player/get_players"
+          map (.pid) answer `shouldBe` [model60n]
 
   -- Stage 22. Heartbeats every 50 ms here; the daemon sends one every 30 s.
   describe "heartbeat" $ do

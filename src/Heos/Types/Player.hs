@@ -49,12 +49,14 @@ instance ToParam PlayState where
 parsePlayState :: Text -> Maybe PlayState
 parsePlayState t = find ((== t) . toParam) [minBound .. maxBound]
 
-data RepeatMode = RepeatAll | RepeatOne | RepeatOff deriving (Show, Eq)
+data RepeatMode = RepeatAll | RepeatOne | RepeatOff deriving (Show, Eq, Enum, Bounded)
 instance ToParam RepeatMode where
   toParam = \case
     RepeatAll -> "on_all"
     RepeatOne -> "on_one"
     RepeatOff -> "off"
+parseRepeatMode :: Text -> Maybe RepeatMode
+parseRepeatMode t = find ((== t) . toParam) [minBound .. maxBound]
 
 newtype QueueId = QueueId Int
   deriving (Show, Eq)

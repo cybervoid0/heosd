@@ -1,11 +1,20 @@
+{-# LANGUAGE StandaloneDeriving #-}
 module Heos.Command.Heos where
 
+import Control.Exception (throwIO)
+import Data.Aeson (parseJSON)
+import Data.Aeson.Types (parseMaybe)
 import Data.ByteString (ByteString)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
+import Heos.Envelope.Heos (HeosHeader (..), ProtocolError (..), decodePayload, fromMessage)
 import Heos.ToParam (ToParam (..), (.=), (.=?))
-import Heos.Types (ContainerId, Credentials (..), GroupId, MediaId, OnOff, PlayState, PlayerId, QueueId, QueueMode, RepeatMode, SearchCriteriaId, SourceId)
-import Heos.Url (UrlPair(..), renderCommandUrl)
+import Heos.Types (ContainerId, Credentials (..), Envelope (..), GroupId, MediaId, MusicSource, OnOff, PlayState, Player, PlayerId, QueueId, QueueItem, QueueMode, RepeatMode, SearchCriteriaId, SearchCriterion, SearchResult, SourceId, Track, UpdateState, parseOnOff, parsePlayState, parseRepeatMode, parseUpdateState)
+import Heos.Url (UrlPair (..), decodeQuery, lookupParam, renderCommandUrl)
+import Text.Read (readMaybe)
 
 -- Two parameters, not one value, so no ToParam: see AccountSignIn in commandParts.
 
@@ -38,73 +47,157 @@ data ServiceOption
   | RemoveFromFavorites MediaId -- 20
   deriving (Show, Eq)
 
-data Command
-  = RegisterForChangeEvents OnOff -- 4.1.1
-  | AccountCheck -- 4.1.2
-  | AccountSignIn Credentials -- 4.1.3
-  | AccountSignOut -- 4.1.4
-  | HeartBeat -- 4.1.5
-  | Reboot -- 4.1.6
-  | PrettifyJson OnOff -- 4.1.7
-  | GetPlayers -- 4.2.1
-  | GetPlayerInfo PlayerId -- 4.2.2
-  | GetPlayState PlayerId -- 4.2.3
-  | SetPlayState PlayerId PlayState -- 4.2.4
-  | GetNowPlayingMedia PlayerId -- 4.2.5
-  | GetVolume PlayerId -- 4.2.6
-  | SetVolume PlayerId Int -- 4.2.7
-  | VolumeUp PlayerId Int -- 4.2.8
-  | VolumeDown PlayerId Int -- 4.2.9
-  | GetMute PlayerId -- 4.2.10
-  | SetMute PlayerId OnOff -- 4.2.11
-  | ToggleMute PlayerId -- 4.2.12
-  | GetPlayMode PlayerId -- 4.2.13
-  | SetPlayMode PlayerId RepeatMode OnOff -- 4.2.14
-  | GetQueue PlayerId (Maybe Range) -- 4.2.15
-  | PlayQueueItem PlayerId QueueId -- 4.2.16
-  | RemoveFromQueue PlayerId [QueueId] -- 4.2.17
-  | SaveQueue PlayerId Text -- 4.2.18
-  | ClearQueue PlayerId -- 4.2.19
-  | MoveQueue PlayerId [QueueId] QueueId -- 4.2.20
-  | PlayNext PlayerId -- 4.2.21
-  | PlayPrevious PlayerId -- 4.2.22
-  | SetQuickSelect PlayerId QuickSelectId -- 4.2.23
-  | PlayQuickSelect PlayerId QuickSelectId -- 4.2.24
-  | GetQuickSelects PlayerId (Maybe QuickSelectId) -- 4.2.25
-  | CheckUpdate PlayerId -- 4.2.26
-  | GetGroups -- 4.3.1
-  | GetGroupInfo GroupId -- 4.3.2
-  | SetGroup PlayerId [PlayerId] -- 4.3.3, leader and members; no members ungroups
-  | GetGroupVolume GroupId -- 4.3.4
-  | SetGroupVolume GroupId Int -- 4.3.5
-  | GroupVolumeUp GroupId Int -- 4.3.6
-  | GroupVolumeDown GroupId Int -- 4.3.7
-  | GetGroupMute GroupId -- 4.3.8
-  | SetGroupMute GroupId OnOff -- 4.3.9
-  | ToggleGroupMute GroupId -- 4.3.10
-  | GetMusicSources -- 4.4.1
-  | GetSourceInfo SourceId -- 4.4.2
-  | BrowseSource SourceId -- 4.4.3
-  | BrowseContainer SourceId ContainerId (Maybe Range) -- 4.4.4
-  | GetSearchCriteria SourceId -- 4.4.5
-  | Search SourceId Text SearchCriteriaId (Maybe Range) -- 4.4.6
-  | PlayStation PlayerId SourceId (Maybe ContainerId) MediaId Text -- 4.4.7
-  | PlayPreset PlayerId Int -- 4.4.8
-  | PlayInput PlayerId (Maybe PlayerId) InputName -- 4.4.9, the Maybe is spid (another speaker as source)
-  | PlayUrl PlayerId Text -- 4.4.10
-  | AddContainerToQueue PlayerId SourceId ContainerId QueueMode -- 4.4.11
-  | AddTrackToQueue PlayerId SourceId ContainerId MediaId QueueMode -- 4.4.12
+data Command a where
+  RegisterForChangeEvents :: OnOff -> Command () -- 4.1.1
+  AccountCheck :: Command () -- 4.1.2
+  AccountSignIn :: Credentials -> Command (Maybe Text) -- 4.1.3
+  AccountSignOut :: Command () -- 4.1.4
+  HeartBeat :: Command () -- 4.1.5
+  Reboot :: Command () -- 4.1.6
+  PrettifyJson :: OnOff -> Command () -- 4.1.7
+  GetPlayers :: Command [Player] -- 4.2.1
+  GetPlayerInfo :: PlayerId -> Command Player -- 4.2.2
+  GetPlayState :: PlayerId -> Command PlayState -- 4.2.3
+  SetPlayState :: PlayerId -> PlayState -> Command () -- 4.2.4
+  GetNowPlayingMedia :: PlayerId -> Command (Maybe Track) -- 4.2.5
+  GetVolume :: PlayerId -> Command Int -- 4.2.6
+  SetVolume :: PlayerId -> Int -> Command () -- 4.2.7
+  VolumeUp :: PlayerId -> Int -> Command () -- 4.2.8
+  VolumeDown :: PlayerId -> Int -> Command () -- 4.2.9
+  GetMute :: PlayerId -> Command OnOff -- 4.2.10
+  SetMute :: PlayerId -> OnOff -> Command () -- 4.2.11
+  ToggleMute :: PlayerId -> Command () -- 4.2.12
+  GetPlayMode :: PlayerId -> Command (RepeatMode, OnOff) -- 4.2.13
+  SetPlayMode :: PlayerId -> RepeatMode -> OnOff -> Command () -- 4.2.14
+  GetQueue :: PlayerId -> (Maybe Range) -> Command [QueueItem] -- 4.2.15
+  PlayQueueItem :: PlayerId -> QueueId -> Command () -- 4.2.16
+  RemoveFromQueue :: PlayerId -> [QueueId] -> Command () -- 4.2.17
+  SaveQueue :: PlayerId -> Text -> Command () -- 4.2.18
+  ClearQueue :: PlayerId -> Command () -- 4.2.19
+  MoveQueue :: PlayerId -> [QueueId] -> QueueId -> Command () -- 4.2.20
+  PlayNext :: PlayerId -> Command () -- 4.2.21
+  PlayPrevious :: PlayerId -> Command () -- 4.2.22
+  SetQuickSelect :: PlayerId -> QuickSelectId -> Command () -- 4.2.23
+  PlayQuickSelect :: PlayerId -> QuickSelectId -> Command () -- 4.2.24
+  GetQuickSelects :: PlayerId -> (Maybe QuickSelectId) -> Command () -- 4.2.25
+  CheckUpdate :: PlayerId -> Command UpdateState -- 4.2.26
+  GetGroups :: Command Envelope -- 4.3.1
+  GetGroupInfo :: GroupId -> Command Envelope -- 4.3.2
+  SetGroup :: PlayerId -> [PlayerId] -> Command () -- 4.3.3, leader and members; no members ungroups
+  GetGroupVolume :: GroupId -> Command Int -- 4.3.4
+  SetGroupVolume :: GroupId -> Int -> Command () -- 4.3.5
+  GroupVolumeUp :: GroupId -> Int -> Command () -- 4.3.6
+  GroupVolumeDown :: GroupId -> Int -> Command () -- 4.3.7
+  GetGroupMute :: GroupId -> Command OnOff -- 4.3.8
+  SetGroupMute :: GroupId -> OnOff -> Command () -- 4.3.9
+  ToggleGroupMute :: GroupId -> Command () -- 4.3.10
+  {- 4.4 Browse Commands -}
+  GetMusicSources :: Command [MusicSource] -- 4.4.1
+  GetSourceInfo :: SourceId -> Command (Maybe MusicSource) -- 4.4.2
+  BrowseSource :: SourceId -> Command Envelope -- 4.4.3
+  BrowseContainer :: SourceId -> ContainerId -> (Maybe Range) -> Command Envelope -- 4.4.4
+  GetSearchCriteria :: SourceId -> Command [SearchCriterion] -- 4.4.5
+  Search :: SourceId -> Text -> SearchCriteriaId -> (Maybe Range) -> Command [SearchResult] -- 4.4.6
+  PlayStation :: PlayerId -> SourceId -> (Maybe ContainerId) -> MediaId -> Text -> Command Envelope -- 4.4.7
+  PlayPreset :: PlayerId -> Int -> Command () -- 4.4.8
+  PlayInput :: PlayerId -> (Maybe PlayerId) -> InputName -> Command () -- 4.4.9, the Maybe is spid another speaker as source)
+  PlayUrl :: PlayerId -> Text -> Command () -- 4.4.10
+  AddContainerToQueue :: PlayerId -> SourceId -> ContainerId -> QueueMode -> Command () -- 4.4.11
+  AddTrackToQueue :: PlayerId -> SourceId -> ContainerId -> MediaId -> QueueMode -> Command () -- 4.4.12
   -- 4.4.13 Get HEOS Playlists: done with BrowseSource / BrowseContainer
-  | RenamePlaylist SourceId ContainerId Text -- 4.4.14
-  | DeletePlaylist SourceId ContainerId -- 4.4.15
+  RenamePlaylist :: SourceId -> ContainerId -> Text -> Command () -- 4.4.14
+  DeletePlaylist :: SourceId -> ContainerId -> Command () -- 4.4.15
   -- 4.4.16 Get HEOS History: done with BrowseSource / BrowseContainer
-  | RetrieveMetadata SourceId ContainerId -- 4.4.17
+  RetrieveMetadata :: SourceId -> ContainerId -> Command () -- 4.4.17
   -- 4.4.18 Get Service Options: obsolete, left out
-  | SetServiceOption ServiceOption -- 4.4.19
-  deriving (Show, Eq)
+  SetServiceOption :: ServiceOption -> Command () -- 4.4.19
+
+-- A GADT cannot take a deriving clause: each constructor fixes the
+-- parameter differently, so the instance is asked for standalone.
+deriving stock instance Show (Command a)
+
+-- | What to take out of the reply, by command. The type of each
+--   constructor says what comes back; this is where it comes from: the
+--   payload, a key of the message, or nothing at all. A reply that does not
+--   fit is a 'ProtocolError'.
+decodeReply :: Envelope -> Command a -> IO a
+decodeReply env = \case
+  -- 4.1 system
+  RegisterForChangeEvents{} -> pure ()
+  AccountCheck -> pure ()
+  AccountSignIn{} -> pure signedInAs
+  AccountSignOut -> pure ()
+  HeartBeat -> pure ()
+  Reboot -> pure ()
+  PrettifyJson{} -> pure ()
+  -- 4.2 player
+  GetPlayers -> decodePayload env
+  GetPlayerInfo{} -> decodePayload env
+  GetPlayState{} -> fromMessage "state" parsePlayState env
+  SetPlayState{} -> pure ()
+  -- the payload describes a track only while one is loaded: anything else is "nothing plays"
+  GetNowPlayingMedia{} -> pure (env.payload >>= parseMaybe parseJSON)
+  GetVolume{} -> fromMessage "level" readText env
+  SetVolume{} -> pure ()
+  VolumeUp{} -> pure ()
+  VolumeDown{} -> pure ()
+  GetMute{} -> fromMessage "state" parseOnOff env
+  SetMute{} -> pure ()
+  ToggleMute{} -> pure ()
+  GetPlayMode{} -> (,) <$> fromMessage "repeat" parseRepeatMode env <*> fromMessage "shuffle" parseOnOff env
+  SetPlayMode{} -> pure ()
+  GetQueue{} -> decodePayload env
+  PlayQueueItem{} -> pure ()
+  RemoveFromQueue{} -> pure ()
+  SaveQueue{} -> pure ()
+  ClearQueue{} -> pure ()
+  MoveQueue{} -> pure ()
+  PlayNext{} -> pure ()
+  PlayPrevious{} -> pure ()
+  SetQuickSelect{} -> pure ()
+  PlayQuickSelect{} -> pure ()
+  GetQuickSelects{} -> pure ()
+  CheckUpdate{} -> do
+    fields <- decodePayload @(Map Text Text) env
+    inPayload "update" (Map.lookup "update" fields >>= parseUpdateState)
+  -- 4.3 groups
+  GetGroups -> pure env
+  GetGroupInfo{} -> pure env
+  SetGroup{} -> pure ()
+  GetGroupVolume{} -> fromMessage "level" readText env
+  SetGroupVolume{} -> pure ()
+  GroupVolumeUp{} -> pure ()
+  GroupVolumeDown{} -> pure ()
+  GetGroupMute{} -> fromMessage "state" parseOnOff env
+  SetGroupMute{} -> pure ()
+  ToggleGroupMute{} -> pure ()
+  -- 4.4 browse
+  GetMusicSources -> decodePayload env
+  GetSourceInfo{} -> decodePayload env
+  BrowseSource{} -> pure env
+  BrowseContainer{} -> pure env
+  GetSearchCriteria{} -> decodePayload env
+  Search{} -> decodePayload env
+  PlayStation{} -> pure env
+  PlayPreset{} -> pure ()
+  PlayInput{} -> pure ()
+  PlayUrl{} -> pure ()
+  AddContainerToQueue{} -> pure ()
+  AddTrackToQueue{} -> pure ()
+  RenamePlaylist{} -> pure ()
+  DeletePlaylist{} -> pure ()
+  RetrieveMetadata{} -> pure ()
+  SetServiceOption{} -> pure ()
+ where
+  -- "signed_in&un=user@example.com" -> Just "user@example.com"; "signed_out" -> Nothing
+  signedInAs = env.heos.message >>= lookupParam "un" . decodeQuery
+  readText :: (Read a) => Text -> Maybe a
+  readText = readMaybe . T.unpack
+  inPayload :: Text -> Maybe a -> IO a
+  inPayload key = maybe (throwIO (ProtocolError ("no " <> key <> " in payload"))) pure
 
 -- Convert all existing HEOS commands with arguments to an intermediate data representation for further rendering
-commandParts :: Command -> (Text, [UrlPair])
+commandParts :: Command a -> (Text, [UrlPair])
 commandParts = \case
   -- System commands
   RegisterForChangeEvents onOff -> ("system/register_for_change_events", ["enable" .= onOff])
@@ -212,7 +305,7 @@ mid :: MediaId -> UrlPair
 mid m = "mid" .= m
 
 -- | Convert Sequence + Command to HEOS-style URL-encoded String
-renderCommand :: Int -> Command -> ByteString
+renderCommand :: Int -> Command a -> ByteString
 renderCommand seqNo cmd =
   encodeUtf8 (renderCommandUrl ("heos://" <> path) (pairs <> ["SEQUENCE" .= seqNo]) <> "\r\n")
  where

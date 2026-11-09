@@ -37,7 +37,7 @@ import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
-import Heos.Command.Heos (Command (..), renderCommand)
+import Heos.Command.Heos (Command (..), decodeReply, renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Connection.Types (
   ConnectionError (..),
@@ -47,12 +47,10 @@ import Heos.Connection.Types (
   HeosConnectionParams (..),
  )
 import Heos.Envelope.Heos (
-  Envelope (..),
   HeosEvent (..),
   HeosHeader (..),
   IncomingEnvelope (..),
   classifyEnvelope,
-  decodePayload,
  )
 import Heos.Time (toMicros)
 import Heos.Types
@@ -64,7 +62,7 @@ import Text.Read (readMaybe)
 
 readPid :: Socket -> ConnectionProps -> IO PlayerId
 readPid connSock props = do
-  players :: [Player] <- sendOn connSock props GetPlayers >>= decodePayload
+  players :: [Player] <- sendOn connSock props GetPlayers
   player <- maybe (throwIO PlayerNotFound) pure (listToMaybe players)
   pure player.pid
 
@@ -188,7 +186,7 @@ subscribe conn = atomically $ dupTChan conn.props.events
 --   is registered under the SEQUENCE number before sending, otherwise a
 --   fast reply could arrive before anyone waits for it, and removed by the
 --   bracket however the wait ends: reply, timeout or cancellation.
-sendOn :: Socket -> ConnectionProps -> Command -> IO Envelope
+sendOn :: Socket -> ConnectionProps -> Command a -> IO a
 sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
   -- взять номер и сдвинуть счётчик; modifyTVar' вычисляет n + 1 сразу,
   -- иначе в TVar лежал бы thunk до следующего чтения
@@ -206,11 +204,12 @@ sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
       sendAll sock (renderCommand seqNo cmd)
     -- кто-то снаружи уже положил ответ на эту команду в ячейку, нужно её достать
     -- и вернуть, а в случае если не уложились в таймаут - бросить исключение
-    timeout (toMicros props.params.commandTimeout) (atomically $ takeTMVar box) >>= maybe (throwIO ConnectionTimeout) (either throwIO pure)
+    env <- timeout (toMicros props.params.commandTimeout) (atomically $ takeTMVar box) >>= maybe (throwIO ConnectionTimeout) (either throwIO pure)
+    decodeReply env cmd
 
 -- | 'sendOn' over the commands socket, for callers outside this module:
 --   a connection error comes back as a value, not as an exception.
-sendCommand :: HeosConnection -> Command -> IO Envelope
+sendCommand :: HeosConnection -> Command a -> IO a
 sendCommand conn = sendOn conn.sockets.commands conn.props
 
 -- | Keep one socket alive: a heart_beat every 'heartbeatDelay'. The device

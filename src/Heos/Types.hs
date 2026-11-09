@@ -9,8 +9,10 @@ module Heos.Types (
   module Heos.Types.Browse,
   trueFalse,
   yesNo,
+  Envelope (..),
 ) where
 
+import Heos.Envelope.Heos (Envelope (..))
 import Heos.Json (trueFalse, yesNo)
 import Heos.Types.Browse
 import Heos.Types.Player

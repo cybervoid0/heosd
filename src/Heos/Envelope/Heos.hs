@@ -97,6 +97,7 @@ classifyEnvelope env
 --   where one is due, a payload of the wrong shape, a message without the
 --   key. The connection is fine; the device said something unforeseen.
 newtype ProtocolError = ProtocolError Text deriving (Show)
+
 instance Exception ProtocolError
 
 -- the payload of a reply, decoded into whatever the operation returns

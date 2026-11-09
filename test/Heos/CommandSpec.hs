@@ -17,17 +17,17 @@ spec = do
   -- section. Where the spec has a typo (quotes around values, a missing pid,
   -- "&?" in a URL), the expected line is the corrected one.
   describe "renderCommand matches the spec examples" $
-    forM_ specExamples $ \(section, cmd, expected) ->
+    forM_ specExamples $ \(section, SomeCommand cmd, expected) ->
       it (section <> "  " <> T.unpack expected) $
         wire cmd `shouldBe` expect expected
 
   describe "framing" $ do
     it "every command starts with heos://" $
-      forM_ specExamples $ \(_, cmd, _) ->
+      forM_ specExamples $ \(_, SomeCommand cmd, _) ->
         wire cmd `shouldSatisfy` T.isPrefixOf "heos://"
 
     it "every command ends with exactly one \\r\\n" $
-      forM_ specExamples $ \(_, cmd, _) -> do
+      forM_ specExamples $ \(_, SomeCommand cmd, _) -> do
         wire cmd `shouldSatisfy` T.isSuffixOf "\r\n"
         T.count "\r\n" (wire cmd) `shouldBe` 1
 
@@ -36,11 +36,11 @@ spec = do
 
   describe "SEQUENCE" $ do
     it "is the last parameter" $
-      forM_ specExamples $ \(_, cmd, _) ->
+      forM_ specExamples $ \(_, SomeCommand cmd, _) ->
         wire cmd `shouldSatisfy` T.isSuffixOf "SEQUENCE=1\r\n"
 
     it "appears exactly once" $
-      forM_ specExamples $ \(_, cmd, _) ->
+      forM_ specExamples $ \(_, SomeCommand cmd, _) ->
         T.count "SEQUENCE=" (wire cmd) `shouldBe` 1
 
     it "follows the other parameters with &" $
@@ -153,92 +153,100 @@ spec = do
       wire (AccountSignIn (Credentials "me" "secret")) `shouldSatisfy` T.isInfixOf "pw=secret"
 
 -- | The line for a command sent with SEQUENCE=1.
-wire :: Command -> Text
+wire :: Command a -> Text
 wire = wireSeq 1
 
-wireSeq :: Int -> Command -> Text
+wireSeq :: Int -> Command a -> Text
 wireSeq n = decodeUtf8 . renderCommand n
+
+-- | A command with its reply type hidden, so that commands answering with
+--   different things can sit in one list. Only the wire side is looked at.
+data SomeCommand = forall a. SomeCommand (Command a)
+
+-- | One spec example: section, command, the URL the spec prints for it.
+ex :: String -> Command a -> Text -> (String, SomeCommand, Text)
+ex section cmd url = (section, SomeCommand cmd, url)
 
 -- | A spec example line as it goes on the wire: SEQUENCE=1 appended as the
 --   last parameter, then the line ending.
 expect :: Text -> Text
 expect url = url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "SEQUENCE=1\r\n"
 
-specExamples :: [(String, Command, Text)]
+specExamples :: [(String, SomeCommand, Text)]
 specExamples =
-  [ ("4.1.1", RegisterForChangeEvents On, "heos://system/register_for_change_events?enable=on")
-  , ("4.1.2", AccountCheck, "heos://system/check_account")
-  , ("4.1.3", AccountSignIn (Credentials "user@gmail.com" "12345"), "heos://system/sign_in?un=user@gmail.com&pw=12345")
-  , ("4.1.4", AccountSignOut, "heos://system/sign_out")
-  , ("4.1.5", HeartBeat, "heos://system/heart_beat")
-  , ("4.1.6", Reboot, "heos://system/reboot")
-  , ("4.1.7", PrettifyJson On, "heos://system/prettify_json_response?enable=on")
-  , ("4.2.1", GetPlayers, "heos://player/get_players")
-  , ("4.2.2", GetPlayerInfo (PlayerId 1), "heos://player/get_player_info?pid=1")
-  , ("4.2.3", GetPlayState (PlayerId 1), "heos://player/get_play_state?pid=1")
-  , ("4.2.4", SetPlayState (PlayerId 1) Play, "heos://player/set_play_state?pid=1&state=play")
-  , ("4.2.5", GetNowPlayingMedia (PlayerId 1), "heos://player/get_now_playing_media?pid=1")
-  , ("4.2.6", GetVolume (PlayerId 1), "heos://player/get_volume?pid=1")
-  , ("4.2.7", SetVolume (PlayerId 2) 30, "heos://player/set_volume?pid=2&level=30")
-  , ("4.2.8", VolumeUp (PlayerId 2) 5, "heos://player/volume_up?pid=2&step=5")
-  , ("4.2.9", VolumeDown (PlayerId 2) 5, "heos://player/volume_down?pid=2&step=5")
-  , ("4.2.10", GetMute (PlayerId 1), "heos://player/get_mute?pid=1")
-  , ("4.2.11", SetMute (PlayerId 3) Off, "heos://player/set_mute?pid=3&state=off")
-  , ("4.2.12", ToggleMute (PlayerId 3), "heos://player/toggle_mute?pid=3")
-  , ("4.2.13", GetPlayMode (PlayerId 1), "heos://player/get_play_mode?pid=1")
-  , ("4.2.14", SetPlayMode (PlayerId 1) RepeatAll Off, "heos://player/set_play_mode?pid=1&repeat=on_all&shuffle=off")
-  , ("4.2.15", GetQueue (PlayerId 1) (Just (Range 0 10)), "heos://player/get_queue?pid=1&range=0,10")
-  , ("4.2.16", PlayQueueItem (PlayerId 2) (QueueId 9), "heos://player/play_queue?pid=2&qid=9")
-  , ("4.2.17", RemoveFromQueue (PlayerId 1) [QueueId 4, QueueId 5, QueueId 6], "heos://player/remove_from_queue?pid=1&qid=4,5,6")
-  , ("4.2.18", SaveQueue (PlayerId 1) "great playlist", "heos://player/save_queue?pid=1&name=great playlist")
-  , ("4.2.19", ClearQueue (PlayerId 1), "heos://player/clear_queue?pid=1")
-  , ("4.2.20", MoveQueue (PlayerId 2) [QueueId 2, QueueId 4] (QueueId 6), "heos://player/move_queue_item?pid=2&sqid=2,4&dqid=6")
-  , ("4.2.21", PlayNext (PlayerId 1), "heos://player/play_next?pid=1")
-  , ("4.2.22", PlayPrevious (PlayerId 1), "heos://player/play_previous?pid=1")
-  , ("4.2.23", SetQuickSelect (PlayerId 1) (QuickSelectId 2), "heos://player/set_quickselect?pid=1&id=2")
-  , ("4.2.24", PlayQuickSelect (PlayerId 1) (QuickSelectId 2), "heos://player/play_quickselect?pid=1&id=2")
-  , ("4.2.25", GetQuickSelects (PlayerId 1) Nothing, "heos://player/get_quickselects?pid=1")
-  , ("4.2.26", CheckUpdate (PlayerId 1), "heos://player/check_update?pid=1")
-  , ("4.3.1", GetGroups, "heos://group/get_groups")
-  , ("4.3.2", GetGroupInfo (GroupId 1), "heos://group/get_group_info?gid=1")
-  , ("4.3.3", SetGroup (PlayerId 3) [PlayerId 1, PlayerId 4], "heos://group/set_group?pid=3,1,4")
-  , ("4.3.3 ungroup", SetGroup (PlayerId 3) [], "heos://group/set_group?pid=3")
-  , ("4.3.4", GetGroupVolume (GroupId 1), "heos://group/get_volume?gid=1")
-  , ("4.3.5", SetGroupVolume (GroupId 1) 30, "heos://group/set_volume?gid=1&level=30")
-  , ("4.3.6", GroupVolumeUp (GroupId 1) 5, "heos://group/volume_up?gid=1&step=5")
-  , ("4.3.7", GroupVolumeDown (GroupId 1) 5, "heos://group/volume_down?gid=1&step=5")
-  , ("4.3.8", GetGroupMute (GroupId 1), "heos://group/get_mute?gid=1")
-  , ("4.3.9", SetGroupMute (GroupId 1) Off, "heos://group/set_mute?gid=1&state=off")
-  , ("4.3.10", ToggleGroupMute (GroupId 1), "heos://group/toggle_mute?gid=1")
-  , ("4.4.1", GetMusicSources, "heos://browse/get_music_sources")
-  , ("4.4.2", GetSourceInfo (SourceId 1), "heos://browse/get_source_info?sid=1")
-  , ("4.4.3", BrowseSource (SourceId 1), "heos://browse/browse?sid=1")
-  , ("4.4.4", BrowseContainer (SourceId 2) (ContainerId "TopAlbums") (Just (Range 0 100)), "heos://browse/browse?sid=2&cid=TopAlbums&range=0,100")
-  , ("4.4.5", GetSearchCriteria (SourceId 3), "heos://browse/get_search_criteria?sid=3")
-  , ("4.4.6", Search (SourceId 2) "U2" (SearchCriteriaId 1) Nothing, "heos://browse/search?sid=2&search=U2&scid=1")
-  , ("4.4.7", PlayStation (PlayerId 1) (SourceId 2) (Just (ContainerId "CID-55")) (MediaId "15376") "Q95", "heos://browse/play_stream?pid=1&sid=2&cid=CID-55&mid=15376&name=Q95")
-  , ("4.4.8", PlayPreset (PlayerId 1) 2, "heos://browse/play_preset?pid=1&preset=2")
-  , ("4.4.9", PlayInput (PlayerId 1234) Nothing (InputName "inputs/aux_in_1"), "heos://browse/play_input?pid=1234&input=inputs/aux_in_1")
-  , ("4.4.9 spid", PlayInput (PlayerId 1234) (Just (PlayerId 9876)) (InputName "inputs/aux_in_1"), "heos://browse/play_input?pid=1234&spid=9876&input=inputs/aux_in_1")
-  , ("4.4.10", PlayUrl (PlayerId 1) "http://10.110.25.159:49152/web/138.mp3", "heos://browse/play_stream?pid=1&url=http://10.110.25.159:49152/web/138.mp3")
-  , ("4.4.11", AddContainerToQueue (PlayerId 1) (SourceId 5) (ContainerId "Artist/All") AddPlayNext, "heos://browse/add_to_queue?pid=1&sid=5&cid=Artist/All&aid=2")
-  , ("4.4.12", AddTrackToQueue (PlayerId 1) (SourceId 8) (ContainerId "Artists/All") (MediaId "9") AddPlayNow, "heos://browse/add_to_queue?pid=1&sid=8&cid=Artists/All&mid=9&aid=1")
-  , ("4.4.14", RenamePlaylist (SourceId 11) (ContainerId "234") "new name", "heos://browse/rename_playlist?sid=11&cid=234&name=new name")
-  , ("4.4.15", DeletePlaylist (SourceId 11) (ContainerId "234"), "heos://browse/delete_playlist?sid=11&cid=234")
-  , ("4.4.17", RetrieveMetadata (SourceId 2) (ContainerId "Alb.184664171"), "heos://browse/retrieve_metadata?sid=2&cid=Alb.184664171")
-  , ("4.4.19 opt 1", SetServiceOption (AddTrackToLibrary (SourceId 2) (MediaId "Tra.174684187")), "heos://browse/set_service_option?sid=2&option=1&mid=Tra.174684187")
-  , ("4.4.19 opt 2", SetServiceOption (AddAlbumToLibrary (SourceId 2) (ContainerId "Alb.174684186")), "heos://browse/set_service_option?sid=2&option=2&cid=Alb.174684186")
-  , ("4.4.19 opt 3", SetServiceOption (AddStationToLibrary (SourceId 2) (MediaId "as.6513639")), "heos://browse/set_service_option?sid=2&option=3&mid=as.6513639")
-  , ("4.4.19 opt 4", SetServiceOption (AddPlaylistToLibrary (SourceId 2) (ContainerId "LIBPLAYLIST-pp.175573149") "Lupe Fiasco"), "heos://browse/set_service_option?sid=2&option=4&cid=LIBPLAYLIST-pp.175573149&name=Lupe Fiasco")
-  , ("4.4.19 opt 5", SetServiceOption (RemoveTrackFromLibrary (SourceId 2) (MediaId "Tra.174684187")), "heos://browse/set_service_option?sid=2&option=5&mid=Tra.174684187")
-  , ("4.4.19 opt 6", SetServiceOption (RemoveAlbumFromLibrary (SourceId 2) (ContainerId "LIBALBUM-Alb.174684186")), "heos://browse/set_service_option?sid=2&option=6&cid=LIBALBUM-Alb.174684186")
-  , ("4.4.19 opt 7", SetServiceOption (RemoveStationFromLibrary (SourceId 2) (MediaId "as.6513639")), "heos://browse/set_service_option?sid=2&option=7&mid=as.6513639")
-  , ("4.4.19 opt 8", SetServiceOption (RemovePlaylistFromLibrary (SourceId 2) (ContainerId "LIBPLAYLIST-mp.186017722")), "heos://browse/set_service_option?sid=2&option=8&cid=LIBPLAYLIST-mp.186017722")
-  , ("4.4.19 opt 11", SetServiceOption (ThumbsUp (SourceId 1) (PlayerId (-409995282))), "heos://browse/set_service_option?sid=1&option=11&pid=-409995282")
-  , ("4.4.19 opt 12", SetServiceOption (ThumbsDown (SourceId 1) (PlayerId (-409995282))), "heos://browse/set_service_option?sid=1&option=12&pid=-409995282")
-  , ("4.4.19 opt 13 scid", SetServiceOption (CreateStation (SourceId 1) "Love" (Just (SearchCriteriaId 1)) Nothing), "heos://browse/set_service_option?sid=1&option=13&name=Love&scid=1")
-  , ("4.4.19 opt 13 range", SetServiceOption (CreateStation (SourceId 1) "Love" Nothing (Just (Range 0 10))), "heos://browse/set_service_option?sid=1&option=13&name=Love&range=0,10")
-  , ("4.4.19 opt 19 now playing", SetServiceOption (AddNowPlayingToFavorites (PlayerId (-409995282))), "heos://browse/set_service_option?option=19&pid=-409995282")
-  , ("4.4.19 opt 19 browse", SetServiceOption (AddStationToFavorites (SourceId 3) (MediaId "sas.6513639") "Folk Radio"), "heos://browse/set_service_option?sid=3&option=19&mid=sas.6513639&name=Folk Radio")
-  , ("4.4.19 opt 20", SetServiceOption (RemoveFromFavorites (MediaId "sas.6513639")), "heos://browse/set_service_option?option=20&mid=sas.6513639")
+  [ ex "4.1.1" (RegisterForChangeEvents On) "heos://system/register_for_change_events?enable=on"
+  , ex "4.1.2" (AccountCheck) "heos://system/check_account"
+  , ex "4.1.3" (AccountSignIn (Credentials "user@gmail.com" "12345")) "heos://system/sign_in?un=user@gmail.com&pw=12345"
+  , ex "4.1.4" (AccountSignOut) "heos://system/sign_out"
+  , ex "4.1.5" (HeartBeat) "heos://system/heart_beat"
+  , ex "4.1.6" (Reboot) "heos://system/reboot"
+  , ex "4.1.7" (PrettifyJson On) "heos://system/prettify_json_response?enable=on"
+  , ex "4.2.1" (GetPlayers) "heos://player/get_players"
+  , ex "4.2.2" (GetPlayerInfo (PlayerId 1)) "heos://player/get_player_info?pid=1"
+  , ex "4.2.3" (GetPlayState (PlayerId 1)) "heos://player/get_play_state?pid=1"
+  , ex "4.2.4" (SetPlayState (PlayerId 1) Play) "heos://player/set_play_state?pid=1&state=play"
+  , ex "4.2.5" (GetNowPlayingMedia (PlayerId 1)) "heos://player/get_now_playing_media?pid=1"
+  , ex "4.2.6" (GetVolume (PlayerId 1)) "heos://player/get_volume?pid=1"
+  , ex "4.2.7" (SetVolume (PlayerId 2) 30) "heos://player/set_volume?pid=2&level=30"
+  , ex "4.2.8" (VolumeUp (PlayerId 2) 5) "heos://player/volume_up?pid=2&step=5"
+  , ex "4.2.9" (VolumeDown (PlayerId 2) 5) "heos://player/volume_down?pid=2&step=5"
+  , ex "4.2.10" (GetMute (PlayerId 1)) "heos://player/get_mute?pid=1"
+  , ex "4.2.11" (SetMute (PlayerId 3) Off) "heos://player/set_mute?pid=3&state=off"
+  , ex "4.2.12" (ToggleMute (PlayerId 3)) "heos://player/toggle_mute?pid=3"
+  , ex "4.2.13" (GetPlayMode (PlayerId 1)) "heos://player/get_play_mode?pid=1"
+  , ex "4.2.14" (SetPlayMode (PlayerId 1) RepeatAll Off) "heos://player/set_play_mode?pid=1&repeat=on_all&shuffle=off"
+  , ex "4.2.15" (GetQueue (PlayerId 1) (Just (Range 0 10))) "heos://player/get_queue?pid=1&range=0,10"
+  , ex "4.2.16" (PlayQueueItem (PlayerId 2) (QueueId 9)) "heos://player/play_queue?pid=2&qid=9"
+  , ex "4.2.17" (RemoveFromQueue (PlayerId 1) [QueueId 4, QueueId 5, QueueId 6]) "heos://player/remove_from_queue?pid=1&qid=4,5,6"
+  , ex "4.2.18" (SaveQueue (PlayerId 1) "great playlist") "heos://player/save_queue?pid=1&name=great playlist"
+  , ex "4.2.19" (ClearQueue (PlayerId 1)) "heos://player/clear_queue?pid=1"
+  , ex "4.2.20" (MoveQueue (PlayerId 2) [QueueId 2, QueueId 4] (QueueId 6)) "heos://player/move_queue_item?pid=2&sqid=2,4&dqid=6"
+  , ex "4.2.21" (PlayNext (PlayerId 1)) "heos://player/play_next?pid=1"
+  , ex "4.2.22" (PlayPrevious (PlayerId 1)) "heos://player/play_previous?pid=1"
+  , ex "4.2.23" (SetQuickSelect (PlayerId 1) (QuickSelectId 2)) "heos://player/set_quickselect?pid=1&id=2"
+  , ex "4.2.24" (PlayQuickSelect (PlayerId 1) (QuickSelectId 2)) "heos://player/play_quickselect?pid=1&id=2"
+  , ex "4.2.25" (GetQuickSelects (PlayerId 1) Nothing) "heos://player/get_quickselects?pid=1"
+  , ex "4.2.26" (CheckUpdate (PlayerId 1)) "heos://player/check_update?pid=1"
+  , ex "4.3.1" (GetGroups) "heos://group/get_groups"
+  , ex "4.3.2" (GetGroupInfo (GroupId 1)) "heos://group/get_group_info?gid=1"
+  , ex "4.3.3" (SetGroup (PlayerId 3) [PlayerId 1, PlayerId 4]) "heos://group/set_group?pid=3,1,4"
+  , ex "4.3.3 ungroup" (SetGroup (PlayerId 3) []) "heos://group/set_group?pid=3"
+  , ex "4.3.4" (GetGroupVolume (GroupId 1)) "heos://group/get_volume?gid=1"
+  , ex "4.3.5" (SetGroupVolume (GroupId 1) 30) "heos://group/set_volume?gid=1&level=30"
+  , ex "4.3.6" (GroupVolumeUp (GroupId 1) 5) "heos://group/volume_up?gid=1&step=5"
+  , ex "4.3.7" (GroupVolumeDown (GroupId 1) 5) "heos://group/volume_down?gid=1&step=5"
+  , ex "4.3.8" (GetGroupMute (GroupId 1)) "heos://group/get_mute?gid=1"
+  , ex "4.3.9" (SetGroupMute (GroupId 1) Off) "heos://group/set_mute?gid=1&state=off"
+  , ex "4.3.10" (ToggleGroupMute (GroupId 1)) "heos://group/toggle_mute?gid=1"
+  , ex "4.4.1" (GetMusicSources) "heos://browse/get_music_sources"
+  , ex "4.4.2" (GetSourceInfo (SourceId 1)) "heos://browse/get_source_info?sid=1"
+  , ex "4.4.3" (BrowseSource (SourceId 1)) "heos://browse/browse?sid=1"
+  , ex "4.4.4" (BrowseContainer (SourceId 2) (ContainerId "TopAlbums") (Just (Range 0 100))) "heos://browse/browse?sid=2&cid=TopAlbums&range=0,100"
+  , ex "4.4.5" (GetSearchCriteria (SourceId 3)) "heos://browse/get_search_criteria?sid=3"
+  , ex "4.4.6" (Search (SourceId 2) "U2" (SearchCriteriaId 1) Nothing) "heos://browse/search?sid=2&search=U2&scid=1"
+  , ex "4.4.7" (PlayStation (PlayerId 1) (SourceId 2) (Just (ContainerId "CID-55")) (MediaId "15376") "Q95") "heos://browse/play_stream?pid=1&sid=2&cid=CID-55&mid=15376&name=Q95"
+  , ex "4.4.8" (PlayPreset (PlayerId 1) 2) "heos://browse/play_preset?pid=1&preset=2"
+  , ex "4.4.9" (PlayInput (PlayerId 1234) Nothing (InputName "inputs/aux_in_1")) "heos://browse/play_input?pid=1234&input=inputs/aux_in_1"
+  , ex "4.4.9 spid" (PlayInput (PlayerId 1234) (Just (PlayerId 9876)) (InputName "inputs/aux_in_1")) "heos://browse/play_input?pid=1234&spid=9876&input=inputs/aux_in_1"
+  , ex "4.4.10" (PlayUrl (PlayerId 1) "http://10.110.25.159:49152/web/138.mp3") "heos://browse/play_stream?pid=1&url=http://10.110.25.159:49152/web/138.mp3"
+  , ex "4.4.11" (AddContainerToQueue (PlayerId 1) (SourceId 5) (ContainerId "Artist/All") AddPlayNext) "heos://browse/add_to_queue?pid=1&sid=5&cid=Artist/All&aid=2"
+  , ex "4.4.12" (AddTrackToQueue (PlayerId 1) (SourceId 8) (ContainerId "Artists/All") (MediaId "9") AddPlayNow) "heos://browse/add_to_queue?pid=1&sid=8&cid=Artists/All&mid=9&aid=1"
+  , ex "4.4.14" (RenamePlaylist (SourceId 11) (ContainerId "234") "new name") "heos://browse/rename_playlist?sid=11&cid=234&name=new name"
+  , ex "4.4.15" (DeletePlaylist (SourceId 11) (ContainerId "234")) "heos://browse/delete_playlist?sid=11&cid=234"
+  , ex "4.4.17" (RetrieveMetadata (SourceId 2) (ContainerId "Alb.184664171")) "heos://browse/retrieve_metadata?sid=2&cid=Alb.184664171"
+  , ex "4.4.19 opt 1" (SetServiceOption (AddTrackToLibrary (SourceId 2) (MediaId "Tra.174684187"))) "heos://browse/set_service_option?sid=2&option=1&mid=Tra.174684187"
+  , ex "4.4.19 opt 2" (SetServiceOption (AddAlbumToLibrary (SourceId 2) (ContainerId "Alb.174684186"))) "heos://browse/set_service_option?sid=2&option=2&cid=Alb.174684186"
+  , ex "4.4.19 opt 3" (SetServiceOption (AddStationToLibrary (SourceId 2) (MediaId "as.6513639"))) "heos://browse/set_service_option?sid=2&option=3&mid=as.6513639"
+  , ex "4.4.19 opt 4" (SetServiceOption (AddPlaylistToLibrary (SourceId 2) (ContainerId "LIBPLAYLIST-pp.175573149") "Lupe Fiasco")) "heos://browse/set_service_option?sid=2&option=4&cid=LIBPLAYLIST-pp.175573149&name=Lupe Fiasco"
+  , ex "4.4.19 opt 5" (SetServiceOption (RemoveTrackFromLibrary (SourceId 2) (MediaId "Tra.174684187"))) "heos://browse/set_service_option?sid=2&option=5&mid=Tra.174684187"
+  , ex "4.4.19 opt 6" (SetServiceOption (RemoveAlbumFromLibrary (SourceId 2) (ContainerId "LIBALBUM-Alb.174684186"))) "heos://browse/set_service_option?sid=2&option=6&cid=LIBALBUM-Alb.174684186"
+  , ex "4.4.19 opt 7" (SetServiceOption (RemoveStationFromLibrary (SourceId 2) (MediaId "as.6513639"))) "heos://browse/set_service_option?sid=2&option=7&mid=as.6513639"
+  , ex "4.4.19 opt 8" (SetServiceOption (RemovePlaylistFromLibrary (SourceId 2) (ContainerId "LIBPLAYLIST-mp.186017722"))) "heos://browse/set_service_option?sid=2&option=8&cid=LIBPLAYLIST-mp.186017722"
+  , ex "4.4.19 opt 11" (SetServiceOption (ThumbsUp (SourceId 1) (PlayerId (-409995282)))) "heos://browse/set_service_option?sid=1&option=11&pid=-409995282"
+  , ex "4.4.19 opt 12" (SetServiceOption (ThumbsDown (SourceId 1) (PlayerId (-409995282)))) "heos://browse/set_service_option?sid=1&option=12&pid=-409995282"
+  , ex "4.4.19 opt 13 scid" (SetServiceOption (CreateStation (SourceId 1) "Love" (Just (SearchCriteriaId 1)) Nothing)) "heos://browse/set_service_option?sid=1&option=13&name=Love&scid=1"
+  , ex "4.4.19 opt 13 range" (SetServiceOption (CreateStation (SourceId 1) "Love" Nothing (Just (Range 0 10)))) "heos://browse/set_service_option?sid=1&option=13&name=Love&range=0,10"
+  , ex "4.4.19 opt 19 now playing" (SetServiceOption (AddNowPlayingToFavorites (PlayerId (-409995282)))) "heos://browse/set_service_option?option=19&pid=-409995282"
+  , ex "4.4.19 opt 19 browse" (SetServiceOption (AddStationToFavorites (SourceId 3) (MediaId "sas.6513639") "Folk Radio")) "heos://browse/set_service_option?sid=3&option=19&mid=sas.6513639&name=Folk Radio"
+  , ex "4.4.19 opt 20" (SetServiceOption (RemoveFromFavorites (MediaId "sas.6513639"))) "heos://browse/set_service_option?option=20&mid=sas.6513639"
   ]

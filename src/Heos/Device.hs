@@ -15,7 +15,7 @@ import Heos.Connection.Avr (AvrConnection)
 import Heos.Connection.Heos (sendOn)
 import Heos.Connection.Types (ConnectionSockets (..))
 import Heos.Device.Parameters
-import Heos.Envelope.Heos (HeosEvent (HeosEvent), ProtocolError (..), decodePayload, fromMessage)
+import Heos.Envelope.Heos (HeosEvent (HeosEvent), ProtocolError (..))
 import Heos.Types
 import Heos.Url (lookupParam)
 import Text.Read (readMaybe)
@@ -68,8 +68,8 @@ tracker chan state conn =
         atomically $ modifyTVar' state $ \s -> s{volume}
       HeosEvent "player_state_changed" p -> forM_ (lookupParam "state" p >>= parsePlayState) $ \playState -> atomically $ modifyTVar' state $ \s -> s{playState}
       HeosEvent "player_now_playing_changed" _ -> handle skipBadReply $ do
-        track <- sendCommand conn (GetNowPlayingMedia conn.pid) >>= decodePayload
-        atomically $ modifyTVar' state $ \s -> s{nowPlaying = Just track}
+        nowPlaying <- sendCommand conn (GetNowPlayingMedia conn.pid)
+        atomically $ modifyTVar' state $ \s -> s{nowPlaying}
       _ -> pure ()
  where
   skipBadReply (ProtocolError msg) = putStrLn ("now playing: " <> T.unpack msg)
@@ -80,27 +80,28 @@ tracker chan state conn =
 initialize :: HeosConnection -> IO (Catalogue, LiveState)
 initialize conn = do
   let (ConnectionSockets _ eSock cSock) = conn.sockets
+      query :: Command a -> IO a
       query = sendOn cSock conn.props
       subscribeCmd = sendOn eSock conn.props
   _ <- subscribeCmd (RegisterForChangeEvents Off)
   -- TODO: поставить сюда signIn
   -- То что в сети есть хотя бы один плеер, было проверено в `readPid` в `Heos.Connection.Heos`
-  players <- query GetPlayers >>= decodePayload
-  sources <- query GetMusicSources >>= decodePayload
+  players <- query GetPlayers
+  sources <- query GetMusicSources
   criteria <-
     Map.fromList
       <$> forM
         sources
         ( \ms -> do
-            crit <- query (GetSearchCriteria ms.sid) >>= decodePayload
+            crit <- query (GetSearchCriteria ms.sid)
             pure (ms.sid, crit)
         )
   let catalogue = Catalogue{sources, players, criteria}
       pid = conn.pid
 
-  nowPlaying <- query (GetNowPlayingMedia pid) >>= decodePayload
-  volume <- query (GetVolume pid) >>= fromMessage "level" (readMaybe . T.unpack)
-  playState <- query (GetPlayState pid) >>= fromMessage "state" parsePlayState
+  nowPlaying <- query (GetNowPlayingMedia pid)
+  volume <- query (GetVolume pid)
+  playState <- query (GetPlayState pid)
 
   let liveState = LiveState{nowPlaying, volume, playState}
   _ <- subscribeCmd (RegisterForChangeEvents On)

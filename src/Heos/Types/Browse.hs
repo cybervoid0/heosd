@@ -6,6 +6,7 @@ module Heos.Types.Browse where
 import Data.Aeson (FromJSON (parseJSON), withObject, (.:), (.:?))
 import Data.List (find)
 import Data.Text (Text)
+import GHC.Generics (Generic)
 import Heos.Json (trueFalse, yesNo)
 import Heos.ToParam (ToParam (..))
 
@@ -47,7 +48,8 @@ instance ToParam QueueMode where
 data Playable
   = PlayTrack SourceId ContainerId MediaId
   | PlayContainer SourceId ContainerId
-  deriving (Show, Eq)
+  deriving (Show, Eq, Generic)
+instance FromJSON Playable
 
 data MusicSource = MusicSource
   { name :: Text
@@ -128,7 +130,8 @@ data Found = Found
   , kind :: Text
   , target :: Playable -- Nothing, если playable = no
   }
-  deriving (Show, Eq)
+  deriving (Eq, Show, Generic)
+instance FromJSON Found
 
 toFound :: SourceId -> SearchResult -> Maybe Found
 toFound sid r@(SearchResult{name, artist, album, resultType}) =
