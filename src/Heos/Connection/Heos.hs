@@ -33,7 +33,7 @@ import Data.ByteString qualified as BS
 import Data.Foldable (asum)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
@@ -49,8 +49,10 @@ import Heos.Connection.Types (
 import Heos.Envelope.Heos (
   HeosEvent (..),
   HeosHeader (..),
+  HeosResult (..),
   IncomingEnvelope (..),
   classifyEnvelope,
+  findError,
  )
 import Heos.Time (toMicros)
 import Heos.Types
@@ -205,7 +207,10 @@ sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
     -- кто-то снаружи уже положил ответ на эту команду в ячейку, нужно её достать
     -- и вернуть, а в случае если не уложились в таймаут - бросить исключение
     env <- timeout (toMicros props.params.commandTimeout) (atomically $ takeTMVar box) >>= maybe (throwIO ConnectionTimeout) (either throwIO pure)
-    decodeReply env cmd
+
+    case (env.heos.result, env.heos.message) of
+      (Just Fail, mbMsg) -> throwIO (findError (fromMaybe "" mbMsg))
+      _ -> decodeReply env cmd
 
 -- | 'sendOn' over the commands socket, for callers outside this module:
 --   a connection error comes back as a value, not as an exception.

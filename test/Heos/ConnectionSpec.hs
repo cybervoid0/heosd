@@ -16,7 +16,7 @@ import Heos.Command.Heos (Command (..))
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
 import Heos.Connection.Heos (findBox, readPid, runConnection, sendCommand, subscribe)
 import Heos.Connection.Types (ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
-import Heos.Envelope.Heos (HeosEvent (..), ProtocolError (..))
+import Heos.Envelope.Heos (HeosError (..), HeosEvent (..))
 import Heos.FakeDevice (answering, answeringWith, commandPath, fixture, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Types
@@ -102,6 +102,17 @@ volumeReply n =
 failedLine :: ByteString
 failedLine =
   "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"fail\", \"message\": \"eid=2&text=ID Not Valid\"}}\r\n"
+
+-- A fail reply to a command without a result: nothing to decode, so the
+-- only way to notice it is the result field itself.
+failedBeatLine :: ByteString
+failedBeatLine =
+  "{\"heos\": {\"command\": \"system/heart_beat\", \"result\": \"fail\", \"message\": \"eid=12&text=System error&syserrno=-1001\"}}\r\n"
+
+-- A fail reply with no message at all: still a failure, just a mute one.
+failedMuteLine :: ByteString
+failedMuteLine =
+  "{\"heos\": {\"command\": \"system/heart_beat\", \"result\": \"fail\"}}\r\n"
 
 -- Send a command and, from the device's side of the socket pair, answer it:
 -- wait for the command line, hand it to the check, then write the replies.
@@ -290,16 +301,27 @@ spec = do
           reply <- exchange conn theirs GetPlayers (const (pure ())) [pendingLine, getPlayersLine]
           map (.pid) reply `shouldBe` [model60n]
 
-    -- A failed result has no payload, so a command that expects one cannot
-    -- be decoded: today that surfaces as a ProtocolError. The device's own
-    -- eid and text are lost on the way; the HeosError task will keep them.
-    it "a failed reply to a command expecting a payload is an error, not a value" $
+    -- A fail reply is checked before any decoding, so the device's own
+    -- eid and text come through, whatever the command expected back.
+    it "a failed reply carries the device's eid and text" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn ->
-          exchange conn theirs GetPlayers (const (pure ())) [failedLine] `shouldThrow` \(ProtocolError _) -> True
+          exchange conn theirs GetPlayers (const (pure ())) [failedLine]
+            `shouldThrow` (== HeosError{eid = Just 2, text = Just "ID Not Valid"})
 
-    it "a failed reply carries the device's eid and text" $
-      pendingWith "HeosError as an exception: a fail reply to a command without result is still swallowed"
+    -- The case that used to be swallowed: nothing to decode, so the fail
+    -- would have come back as a plain ().
+    it "a failed reply to a command without a result is an error, not ()" $
+      withSocketPair $ \(ours, theirs) ->
+        run ours $ \conn ->
+          exchange conn theirs HeartBeat (const (pure ())) [failedBeatLine]
+            `shouldThrow` (== HeosError{eid = Just 12, text = Just "System error"})
+
+    it "a failed reply without a message is still a failure" $
+      withSocketPair $ \(ours, theirs) ->
+        run ours $ \conn ->
+          exchange conn theirs HeartBeat (const (pure ())) [failedMuteLine]
+            `shouldThrow` (== HeosError{eid = Nothing, text = Nothing})
 
     it "nothing is in flight before a command and after its reply" $
       withSocketPair $ \(ours, theirs) ->

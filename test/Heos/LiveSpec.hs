@@ -21,8 +21,8 @@ import Heos.Connection.Heos (runConnection)
 import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
 import Heos.Device (Catalogue (..), Device (..), LiveState (..))
 import Heos.Effect.Heos
-import Heos.Envelope.Heos (Envelope, ProtocolError, decodePayload)
-import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, fixture, replyTo, scripted)
+import Heos.Envelope.Heos (HeosError (..), ProtocolError, decodePayload)
+import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, failReply, fixture, replyTo, scripted)
 import Heos.Handler.Live (runHeosLive)
 import Heos.Time (Seconds (..))
 import Heos.Types
@@ -127,6 +127,13 @@ spec = describe "runHeosLife" $ do
     it "enqueue of a container sends sid and cid, no mid" $ do
       (_, cmds) <- withLive replyTo (enqueue AddPlayNow (PlayContainer (SourceId 10) (ContainerId "77")))
       sent cmds `shouldBe` [("browse/add_to_queue", "pid=1&sid=10&cid=77&aid=1")]
+
+    -- What the device answered on a bare album_id as cid: the refusal must
+    -- reach the caller as the device's own eid and text, not as a quiet ().
+    it "a refused playItem throws the device's error" $ do
+      let refused = scripted [("browse/add_to_queue", failReply "browse/add_to_queue" "eid=14&text=cannot play")]
+      withLive refused (playItem (PlayContainer (SourceId 10) (ContainerId "443242286")))
+        `shouldThrow` (== HeosError{eid = Just 14, text = Just "cannot play"})
 
     -- The first replaces the queue and starts, the rest line up behind it.
     it "playAll replaces the queue with the first item and appends the rest" $ do

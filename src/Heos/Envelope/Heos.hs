@@ -8,6 +8,7 @@ module Heos.Envelope.Heos (
   IncomingEnvelope (..),
   HeosOutcome (..),
   HeosError (..),
+  findError,
   HeosEvent (..),
   classifyEnvelope,
 
@@ -32,6 +33,7 @@ data HeosError = HeosError
   , text :: Maybe Text
   }
   deriving (Show, Eq)
+instance Exception HeosError
 findError :: Text -> HeosError
 findError msg = HeosError{eid, text}
  where

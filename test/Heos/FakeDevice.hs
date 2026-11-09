@@ -8,6 +8,7 @@ module Heos.FakeDevice (
   replyTo,
   scripted,
   messageReply,
+  failReply,
   playersLine,
   fixture,
   commandPath,
@@ -58,6 +59,12 @@ scripted table line = fromMaybe (replyTo line) (lookup (commandPath line) table)
 messageReply :: ByteString -> ByteString -> ByteString
 messageReply path msg =
   "{\"heos\": {\"command\": \"" <> path <> "\", \"result\": \"success\", \"message\": \"" <> msg <> "\"}}\r\n"
+
+-- | A fail reply with the given error message, the way the device refuses
+--   a command: @eid=14&text=cannot play@.
+failReply :: ByteString -> ByteString -> ByteString
+failReply path msg =
+  "{\"heos\": {\"command\": \"" <> path <> "\", \"result\": \"fail\", \"message\": \"" <> msg <> "\"}}\r\n"
 
 -- | A get_players reply with one player, pid 1: what 'withConnection' needs
 --   to find its player. Fits any test that sends its commands to pid 1.
