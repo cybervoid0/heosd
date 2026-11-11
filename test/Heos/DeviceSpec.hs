@@ -5,9 +5,10 @@
 --   replies; nothing here is about sockets as such, that is ConnectionSpec.
 module Heos.DeviceSpec (spec) where
 
-import Control.Concurrent.Async (withAsync)
+import Control.Concurrent.Async (race, withAsync)
 import Control.Concurrent.STM (TVar, atomically, check, modifyTVar', newTVarIO, readTVar, readTVarIO)
 import Control.Exception (bracket)
+import Data.Void (absurd)
 import Control.Retry (constantDelay)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -18,7 +19,7 @@ import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosC
 import Data.Text (Text)
 import Heos.Device (Catalogue (..), LiveState (..), initialize, searchable, tracker)
 import Heos.Envelope.Heos (ProtocolError (..))
-import Heos.FakeDevice (answeringWith, commandPath, commandQuery, fixture, messageReply, scripted)
+import Heos.FakeDevice (answeringWith, commandPath, commandQuery, failReply, fixture, messageReply, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Types
 import Network.Socket (Family (AF_UNIX), Socket, SocketType (Stream), close, socketPair, tupleToHostAddress)
@@ -59,14 +60,19 @@ startUpReplies = do
 -- events through. Returns the action's result and the commands the device
 -- saw, with their lanes, in order.
 withFake :: (ByteString -> ByteString) -> (HeosConnection -> Socket -> IO a) -> IO (a, [(Lane, ByteString)])
-withFake reply act =
+withFake = withFakeWith params
+
+-- 'withFake' with the connection parameters chosen by the test, for the
+-- tests that need a short command timeout.
+withFakeWith :: HeosConnectionParams -> (ByteString -> ByteString) -> (HeosConnection -> Socket -> IO a) -> IO (a, [(Lane, ByteString)])
+withFakeWith params' reply act =
   withPair $ \(ourEvents, devEvents) ->
     withPair $ \(ourCommands, devCommands) -> do
       seen <- newTVarIO []
       withAsync (answer seen EventsLane devEvents) $ \_ ->
         withAsync (answer seen CommandsLane devCommands) $ \_ -> do
           let sockets = ConnectionSockets (tupleToHostAddress (127, 0, 0, 1)) ourEvents ourCommands
-          result <- runConnection params sockets $ \props ->
+          result <- runConnection params' sockets $ \props ->
             act HeosConnection{pid = thePid, sockets, props} devEvents
           commands <- reverse <$> readTVarIO seen
           pure (result, commands)
@@ -92,16 +98,20 @@ initial :: LiveState
 initial = LiveState{nowPlaying = Nothing, volume = 10, playState = Stop}
 
 -- Run the tracker over a connection to a device answering with `reply`,
--- push the events, and hand the state to the check. The tracker is a
--- background thread; the check waits for the state it expects.
+-- push the events, and hand the state to the check. The tracker runs in
+-- the background the way 'withDevice' runs it, under 'race': if it dies,
+-- the test fails with its exception at once, instead of waiting out a
+-- state that will never come.
 withTracker :: (ByteString -> ByteString) -> [ByteString] -> (TVar LiveState -> IO a) -> IO a
-withTracker reply events check' =
-  fst <$> withFake reply (\conn devEvents -> do
+withTracker = withTrackerWith params
+
+withTrackerWith :: HeosConnectionParams -> (ByteString -> ByteString) -> [ByteString] -> (TVar LiveState -> IO a) -> IO a
+withTrackerWith params' reply events check' =
+  fst <$> withFakeWith params' reply (\conn devEvents -> do
     chan <- subscribe conn
     state <- newTVarIO initial
-    withAsync (tracker chan state conn) $ \_ -> do
-      mapM_ (sendAll devEvents) events
-      check' state)
+    race (tracker chan state conn) (mapM_ (sendAll devEvents) events >> check' state)
+      >>= either absurd pure)
 
 -- Wait for the state to satisfy the predicate; a second is plenty, and a
 -- state that never gets there fails the test instead of hanging it.
@@ -265,6 +275,41 @@ spec = do
             , eventLine "player_volume_changed" "pid=-1245882071&level=3&mute=off"
             ]
       withTracker broken events $ \state -> do
+        live <- awaitState state ((== 3) . (.volume))
+        live.nowPlaying `shouldBe` Nothing
+
+    -- The device refuses the query (result=fail). That is the device's
+    -- answer, not a dead link: the tracker notes it and goes on. Today the
+    -- HeosError kills the tracker, the race cancels the user's action, and
+    -- since HeosError is not one of the reconnect handlers' exceptions, the
+    -- whole daemon dies over one refused command.
+    it "survives a now-playing reply the device refuses" $ do
+      reply <- startUpReplies
+      let refusing line
+            | commandPath line == "player/get_now_playing_media" = failReply "player/get_now_playing_media" "eid=12&text=System error"
+            | otherwise = reply line
+          events =
+            [ eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_volume_changed" "pid=-1245882071&level=3&mute=off"
+            ]
+      withTracker refusing events $ \state -> do
+        live <- awaitState state ((== 3) . (.volume))
+        live.nowPlaying `shouldBe` Nothing
+
+    -- The device never answers the query. Whether the link is alive is the
+    -- heartbeat's call, not the tracker's: it gives up on this track and
+    -- goes on with the next event. Today the ConnectionTimeout kills the
+    -- tracker, and with it the connection.
+    it "survives a now-playing query the device never answers" $ do
+      reply <- startUpReplies
+      let silent line
+            | commandPath line == "player/get_now_playing_media" = "" -- nothing goes back
+            | otherwise = reply line
+          events =
+            [ eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_volume_changed" "pid=-1245882071&level=3&mute=off"
+            ]
+      withTrackerWith params{commandTimeout = Seconds 0.1} silent events $ \state -> do
         live <- awaitState state ((== 3) . (.volume))
         live.nowPlaying `shouldBe` Nothing
 

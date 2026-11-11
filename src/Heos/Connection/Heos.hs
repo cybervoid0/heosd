@@ -7,6 +7,7 @@ import Control.Concurrent.Async (
  )
 import Control.Concurrent.STM (
   TChan,
+  TMVar,
   atomically,
   dupTChan,
   modifyTVar',
@@ -37,14 +38,16 @@ import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void, absurd)
-import Heos.Command.Heos (Command (..), decodeReply, renderCommand)
+import Heos.Command.Heos (Command (..), commandParts, decodeReply, renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Connection.Types (
   ConnectionError (..),
   ConnectionProps (..),
   ConnectionSockets (ConnectionSockets, commands),
+  EitherEnvelope,
   HeosConnection (..),
   HeosConnectionParams (..),
+  Waiting (..),
  )
 import Heos.Envelope.Heos (
   HeosEvent (..),
@@ -145,30 +148,30 @@ reader sock conn = go emptyPending `finally` failAll
       Right (IncomingPending _) -> pure ()
       Right (IncomingResponse _ env) -> do
         delivered <- atomically $ do
-          mapIntBox <- readTVar conn.waiting
-          let mbBox = findBox env.heos.message mapIntBox
+          waiting <- readTVar conn.waiting
+          let HeosHeader{command, message} = env.heos
+              mbBox = findBox command message waiting
           maybe (pure False) (\box -> tryPutTMVar box (Right env)) mbBox
         unless delivered $ putStrLn ("stray reply: " <> show env)
       Left err -> print $ show bs <> err
   -- при любом завершении (`finally`): пройти по всей карте, положить в каждую коробочку `Left ConnectionLost`, карту очистить.
   failAll = atomically $ do
-    boxes <- readTVar conn.waiting
-    forM_ boxes $ \box -> tryPutTMVar box (Left ConnectionLost)
+    mapping <- readTVar conn.waiting
+    forM_ mapping $ \waiting -> tryPutTMVar waiting.box (Left ConnectionLost)
     writeTVar conn.waiting Map.empty
 
 -- | Which waiting box a reply belongs to. A reply carries SEQUENCE only
 --   when the command had arguments of its own (the device echoes them);
 --   without it, the reply can only be for the single command in flight,
 --   which 'sendLock' guarantees. Nothing means nobody is waiting for it.
-findBox :: Maybe Text -> Map Int box -> Maybe box
-findBox mbSeqTxt boxes = case seqNo of
-  Just sn -> Map.lookup sn boxes -- ответ с номером: его коробочка
-  Nothing -> case Map.elems boxes of -- без номера: единственная в полёте
-    [box] -> Just box
-    _ -> Nothing
+findBox :: Text -> Maybe Text -> Map Int Waiting -> Maybe (TMVar EitherEnvelope)
+findBox cmdPath mbMsg boxes = (.box) <$> (candidate >>= same)
  where
-  -- вытащить номер SEQUENCE из параметров конверта
-  seqNo = mbSeqTxt >>= lookupParam "SEQUENCE" . decodeQuery >>= readMaybe . T.unpack
+  candidate = case seqNo of
+    Just sn -> Map.lookup sn boxes
+    Nothing -> case Map.elems boxes of [w] -> Just w; _ -> Nothing
+  same w = if w.path == cmdPath then Just w else Nothing
+  seqNo = mbMsg >>= lookupParam "SEQUENCE" . decodeQuery >>= readMaybe . T.unpack
 
 -- | A private copy of the event stream. Each call gets its own copy, so
 --   subscribers don't steal events from each other. Only events arriving
@@ -194,18 +197,19 @@ sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
   -- иначе в TVar лежал бы thunk до следующего чтения
   seqNo <- atomically $ readTVar props.nextSeq <* modifyTVar' props.nextSeq (+ 1)
   box <- newEmptyTMVarIO
-  bracket_ (open seqNo box) (closeBox seqNo) (go seqNo box)
+  let waiting = Waiting{box, path = fst . commandParts $ cmd}
+  bracket_ (open seqNo waiting) (closeBox seqNo) (go seqNo box)
  where
   -- кладём в карту пустую ячейку под будущий ответ от устройства
-  open seqNo box = atomically $ modifyTVar' props.waiting (Map.insert seqNo box)
+  open seqNo waiting = atomically $ modifyTVar' props.waiting (Map.insert seqNo waiting)
   -- в завершении или при обрыве соединения - удалить ячейку
   closeBox seqNo = atomically $ modifyTVar' props.waiting (Map.delete seqNo)
   go seqNo box = do
     -- заменить IOException на ConnectionLost при отправке байтов в сокет
     handle (\(_ :: IOException) -> throwIO ConnectionLost) $
       sendAll sock (renderCommand seqNo cmd)
-    -- кто-то снаружи уже положил ответ на эту команду в ячейку, нужно её достать
-    -- и вернуть, а в случае если не уложились в таймаут - бросить исключение
+    -- `reader` уже получил ответ на эту команду и положил в ячейку, нужно её
+    -- достать и вернуть, а в случае если не уложились в таймаут - бросить исключение
     env <- timeout (toMicros props.params.commandTimeout) (atomically $ takeTMVar box) >>= maybe (throwIO ConnectionTimeout) (either throwIO pure)
 
     case (env.heos.result, env.heos.message) of

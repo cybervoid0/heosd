@@ -1,4 +1,4 @@
-module Heos.Url  where
+module Heos.Url where
 
 import Control.Monad (unless, when)
 import Data.Char (isAlphaNum)
@@ -41,6 +41,8 @@ joinPair (UrlPair key val) = key.text <> "=" <> renderValue val
 --   Sometimes the device sends a bare token instead of a key/value pair, e.g.
 --   "command under process&sid=10&search=Ok Computer&scid=3"
 data UrlParam = UrlFlag Text | UrlKeyValue UrlPair | UrlFailure Text KeyFailure deriving (Show, Eq)
+
+-- | Finds a value for the provided key in a list of URL params
 lookupParam :: Text -> [UrlParam] -> Maybe Text
 lookupParam k ps = listToMaybe [p.val | UrlKeyValue p <- ps, p.key.text == k]
 

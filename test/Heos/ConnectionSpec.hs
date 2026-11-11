@@ -2,7 +2,7 @@ module Heos.ConnectionSpec (spec) where
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async (concurrently, withAsync)
-import Control.Concurrent.STM (TChan, TVar, atomically, check, modifyTVar', newTVarIO, readTChan, readTVar, readTVarIO)
+import Control.Concurrent.STM (TChan, TVar, atomically, check, modifyTVar', newEmptyTMVarIO, newTVarIO, readTChan, readTVar, readTVarIO)
 import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forever)
 import Control.Retry (constantDelay)
@@ -15,9 +15,9 @@ import Data.Text.Encoding qualified as T
 import Heos.Command.Heos (Command (..))
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
 import Heos.Connection.Heos (findBox, readPid, runConnection, sendCommand, subscribe)
-import Heos.Connection.Types (ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
+import Heos.Connection.Types (ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..), Waiting (..))
 import Heos.Envelope.Heos (HeosError (..), HeosEvent (..))
-import Heos.FakeDevice (answering, answeringWith, commandPath, fixture, scripted)
+import Heos.FakeDevice (answering, answeringWith, commandPath, failReply, fixture, messageReply, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Types
 import Heos.Url (decodeQuery)
@@ -478,6 +478,34 @@ spec = do
           answer <- exchange conn theirs GetPlayers (const (pure ())) [getPlayersLine]
           map (.pid) answer `shouldBe` [model60n]
 
+    -- The realistic order: the late reply turns up after the next command
+    -- has registered its box. Neither reply carries a SEQUENCE (heart_beat
+    -- has no arguments, and the device composes "level=" itself, NOTES), so
+    -- "the only box in flight" is not enough to tell them apart: only the
+    -- command the reply names is. Today the heart_beat reply lands in the
+    -- get_volume box and the caller gets a ProtocolError for a reply that
+    -- was never meant for it.
+    it "does not hand a late reply to the next command just because it is the only one in flight" $
+      withSocketPair $ \(ours, theirs) ->
+        runWith testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
+          _ <- try @ConnectionError (sendCommand conn HeartBeat) -- times out
+          _ <- recv theirs 4096 -- the device reads the abandoned heart_beat
+          -- the device reads get_volume, so the box is registered by now, and
+          -- only then answers: the late beat first, the real reply after
+          level <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [heartBeatLine, messageReply "player/get_volume" "pid=1&level=10"]
+          level `shouldBe` 10
+
+    -- Worse when the next command returns (): the late success passes for
+    -- its reply, nothing is decoded, nobody notices, and the device's real
+    -- answer, a refusal, goes stray.
+    it "does not let a late success stand in for the reply to a command the device then refuses" $
+      withSocketPair $ \(ours, theirs) ->
+        runWith testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
+          _ <- try @ConnectionError (sendCommand conn HeartBeat) -- times out
+          _ <- recv theirs 4096 -- the device reads the abandoned heart_beat
+          exchange conn theirs (SetVolume (PlayerId 1) 20) (const (pure ())) [heartBeatLine, failReply "player/set_volume" "eid=9&text=Out of range"]
+            `shouldThrow` (== HeosError{eid = Just 9, text = Just "Out of range"})
+
   -- Stage 22. Heartbeats every 50 ms here; the daemon sends one every 30 s.
   describe "heartbeat" $ do
     -- The device drops a socket that stays silent, so each lane gets its
@@ -502,6 +530,26 @@ spec = do
         outcome <- timeout 2000000 $ try @SomeException $ runWith params ours $ \_ ->
           forever (threadDelay 100000) :: IO ()
         outcome `shouldSatisfy` \o -> case o of Just (Left _) -> True; _ -> False
+
+    -- A refused heartbeat (result=fail) is a dead link as much as a silent
+    -- one. Nobody outside asked for the beat, so the device's reply is of
+    -- no use to anyone: what comes out of the connection must say "the
+    -- link is gone", in the one type 'withReconnect' acts on. Today the
+    -- HeosError itself escapes; and with both lanes refusing, which
+    -- exception escapes depends on which heartbeat went first: the other
+    -- one, cancelled mid-flight, gets ConnectionLost from the readers'
+    -- clean-up and may win the race. The error of a background thread
+    -- should be wrapped once, at the place it is collected, so that the
+    -- outside never sees this lottery.
+    it "ends the connection with a ConnectionError, not the device's reply, when a heartbeat is refused" $
+      withLanes $ \sockets dev -> do
+        let params = testParams{heartbeatDelay = Seconds 0.05}
+            refusing = answeringWith (scripted [("system/heart_beat", failedBeatLine)]) (const (pure ()))
+        withAsync (refusing dev.devEvents) $ \_ ->
+          withAsync (refusing dev.devCommands) $ \_ -> do
+            outcome <- timeout 2000000 $ try @ConnectionError $ runConnection params sockets $ \_ ->
+              forever (threadDelay 100000) :: IO ()
+            outcome `shouldSatisfy` \o -> case o of Just (Left _) -> True; _ -> False
 
   describe "readPid" $ do
     -- The player is not a parameter: it is whatever the device lists
@@ -551,32 +599,60 @@ spec = do
           `shouldThrow` (== ConnectionLost)
 
   describe "findBox" $ do
-    let boxes = Map.fromList [(7, 'a'), (8, 'b')]
+    -- Boxes are TMVars, which compare by identity but have no Show: hence
+    -- `is` instead of shouldBe.
+    let is got want = (got == want) `shouldBe` True
+        twoInFlight = do
+          a <- newEmptyTMVarIO
+          b <- newEmptyTMVarIO
+          pure (a, b, Map.fromList [(7, Waiting "player/get_volume" a), (8, Waiting "browse/search" b)])
+        oneInFlight path = do
+          c <- newEmptyTMVarIO
+          pure (c, Map.singleton 3 (Waiting path c))
 
     it "picks the box with the reply's SEQUENCE" $ do
-      findBox (Just "pid=1&level=3&SEQUENCE=8") boxes `shouldBe` Just 'b'
-      findBox (Just "SEQUENCE=7&pid=1") boxes `shouldBe` Just 'a'
+      (a, b, boxes) <- twoInFlight
+      findBox "browse/search" (Just "sid=10&SEQUENCE=8") boxes `is` Just b
+      findBox "player/get_volume" (Just "SEQUENCE=7&pid=1") boxes `is` Just a
 
-    it "finds nothing for a SEQUENCE nobody is waiting for" $
-      findBox (Just "pid=1&SEQUENCE=9") boxes `shouldBe` Nothing
+    it "finds nothing for a SEQUENCE nobody is waiting for" $ do
+      (_, _, boxes) <- twoInFlight
+      findBox "browse/search" (Just "pid=1&SEQUENCE=9") boxes `is` Nothing
 
-    -- No SEQUENCE: the reply can only be for the single command in flight.
-    it "without a SEQUENCE picks the one box in flight" $
-      findBox (Just "") (Map.singleton 3 'c') `shouldBe` Just 'c'
+    -- The number matches but the command does not: a stale box under a
+    -- reused number, or a device echoing the wrong thing. Not ours.
+    it "refuses a SEQUENCE match when the command differs" $ do
+      (_, _, boxes) <- twoInFlight
+      findBox "player/get_volume" (Just "sid=10&SEQUENCE=8") boxes `is` Nothing
 
-    it "without a SEQUENCE and no message still picks the one box in flight" $
-      findBox Nothing (Map.singleton 3 'c') `shouldBe` Just 'c'
+    -- No SEQUENCE: the reply can only be for the single command in flight,
+    -- and the command it names must be that one.
+    it "without a SEQUENCE picks the one box in flight" $ do
+      (c, boxes) <- oneInFlight "system/heart_beat"
+      findBox "system/heart_beat" (Just "") boxes `is` Just c
+
+    it "without a SEQUENCE and no message still picks the one box in flight" $ do
+      (c, boxes) <- oneInFlight "system/heart_beat"
+      findBox "system/heart_beat" Nothing boxes `is` Just c
+
+    -- The review's case: a late reply to a command that already timed out,
+    -- arriving while the next command's box is the only one there.
+    it "without a SEQUENCE does not take the one box in flight when it waits for another command" $ do
+      (_, boxes) <- oneInFlight "player/get_volume"
+      findBox "browse/search" (Just "eid=12&text=System error") boxes `is` Nothing
 
     -- Guessing between several would hand a reply to the wrong command.
-    it "without a SEQUENCE and several in flight refuses to guess" $
-      findBox (Just "") boxes `shouldBe` Nothing
+    it "without a SEQUENCE and several in flight refuses to guess" $ do
+      (_, _, boxes) <- twoInFlight
+      findBox "browse/search" (Just "") boxes `is` Nothing
 
     it "without a SEQUENCE and nothing in flight finds nothing" $
-      findBox (Just "") (Map.empty :: Map.Map Int Char) `shouldBe` Nothing
+      findBox "system/heart_beat" (Just "") Map.empty `is` Nothing
 
     -- A SEQUENCE that isn't a number is as good as none.
-    it "treats a non-numeric SEQUENCE as absent" $
-      findBox (Just "pid=1&SEQUENCE=abc") (Map.singleton 3 'c') `shouldBe` Just 'c'
+    it "treats a non-numeric SEQUENCE as absent" $ do
+      (c, boxes) <- oneInFlight "player/get_volume"
+      findBox "player/get_volume" (Just "pid=1&SEQUENCE=abc") boxes `is` Just c
 
   describe "splitLines" $ do
     -- The three checks named in the roadmap.

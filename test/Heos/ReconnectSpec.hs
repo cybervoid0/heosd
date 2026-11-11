@@ -1,17 +1,21 @@
 module Heos.ReconnectSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
-import Control.Concurrent.Async (async, concurrently_, race_, wait)
+import Control.Concurrent.Async (async, concurrently_, race_, wait, withAsync)
 import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar, readTVarIO)
-import Control.Exception (ErrorCall (..), bracket, throwIO)
-import Control.Monad (forever)
+import Control.Exception (ErrorCall (..), IOException, bracket, throwIO, try)
+import Control.Monad (forever, void)
 import Control.Retry (constantDelay)
+import Data.ByteString (ByteString)
+import Heos.Command.Heos (Command (..))
+import Heos.Connection.Heos (sendCommand)
 import Heos.Connection.Reconnect (reconnecting)
+import Heos.Connection.Types (ConnectionError (..), HeosConnectionParams (..))
 import Heos.Discovery (DiscoveryError (..))
-import Heos.FakeDevice (answeringWith, playersLine)
+import Heos.FakeDevice (answeringWith, failReply, playersLine)
 import Heos.FakeDevice qualified as Fake
-import Heos.Connection.Types (HeosConnectionParams (..))
 import Heos.Time (Seconds (..))
+import Heos.Types (PlayerId (..))
 import Network.Socket (
   Family (AF_INET),
   HostAddress,
@@ -31,6 +35,7 @@ import Network.Socket (
   socket,
   tupleToHostAddress,
  )
+import System.IO.Error (eofErrorType, isEOFError, mkIOError)
 import System.Timeout (timeout)
 import Test.Hspec
 
@@ -87,12 +92,41 @@ withBoth srv k =
 -- Answer every command on both sockets until the daemon hangs up.
 -- get_players gets a real player: withConnection needs one to come up.
 answerBoth :: Socket -> Socket -> IO ()
-answerBoth a b = answer a `concurrently_` answer b
+answerBoth = answerBothWith echoing
+
+-- The same, with the replies chosen by the test.
+answerBothWith :: (ByteString -> ByteString) -> Socket -> Socket -> IO ()
+answerBothWith reply = answerLanes reply reply
+
+-- One reply function per lane: the events socket is the one the daemon
+-- opens first, so it is the one accepted first. A lane the daemon tears
+-- down with a reply still unread comes back as a reset on this side; that
+-- is the daemon's business, not a reason for the device to stop serving
+-- the other lane, so each lane swallows its own IOException.
+answerLanes :: (ByteString -> ByteString) -> (ByteString -> ByteString) -> Socket -> Socket -> IO ()
+answerLanes replyEvents replyCommands a b = answer replyEvents a `concurrently_` answer replyCommands b
  where
-  answer = answeringWith (Fake.scripted [("player/get_players", playersLine)]) (const (pure ()))
+  answer reply sock = void (try @IOException (answeringWith reply (const (pure ())) sock))
+
+-- The well-behaved device: one player, every other command echoed back.
+echoing :: ByteString -> ByteString
+echoing = Fake.scripted [("player/get_players", playersLine)]
+
+-- The device as the tests here want it: a player for get_players, and
+-- the given way with the rest. An empty reply is silence: nothing is sent.
+deviceThat :: [(ByteString, ByteString)] -> ByteString -> ByteString
+deviceThat table = Fake.scripted (("player/get_players", playersLine) : table)
 
 serve :: Socket -> IO ()
-serve srv = withBoth srv answerBoth
+serve = serveWith echoing
+
+-- Accept one connection (both sockets) and answer with `reply` until the
+-- daemon hangs up.
+serveWith :: (ByteString -> ByteString) -> Socket -> IO ()
+serveWith reply = serveLanes reply reply
+
+serveLanes :: (ByteString -> ByteString) -> (ByteString -> ByteString) -> Socket -> IO ()
+serveLanes replyEvents replyCommands srv = withBoth srv (answerLanes replyEvents replyCommands)
 
 -- A reconnect loop that never finds its way out would hang the suite.
 bounded :: IO a -> IO a
@@ -186,3 +220,64 @@ spec = describe "reconnecting" $ do
       bounded (reconnecting (paramsFor port) (pure loopback) (\_ -> throwIO (ErrorCall "bug in the action")))
         `shouldThrow` (\(ErrorCall msg) -> msg == "bug in the action")
       wait device
+
+  -- Where "about the device" ends. The three tests below draw the line
+  -- between a dead link, which is the connection's business and a reason
+  -- to reconnect, and a failed command or a failed action, which belong
+  -- to whoever issued them. The device here serves connection after
+  -- connection, so a loop that should not happen shows up as a count, or
+  -- as the 5 s bound, rather than as a hang.
+
+  -- Stdin ran dry, a file was missing: an IOException from the action is
+  -- the action's own problem. The link is fine, and reconnecting would only
+  -- run into the same error again, forever. Today the IOException handler
+  -- takes it for a network failure.
+  it "lets an IOException from the action through instead of reconnecting" $
+    withDevice $ \port srv -> do
+      (start, runs) <- counting
+      withAsync (forever (serve srv)) $ \_ -> do
+        bounded (reconnecting (paramsFor port) (pure loopback) (\_ -> start >> ioError eof))
+          `shouldThrow` isEOFError
+        runs >>= (`shouldBe` 1)
+
+  -- One command the device is slow to answer is not a dropped link: the
+  -- heartbeat still gets through, the sockets are fine. The caller gets
+  -- the timeout and decides what to do; tearing down both sockets, the
+  -- telnet session and running discovery again over a slow search is not
+  -- it. Today ConnectionTimeout is retried wherever it was thrown.
+  it "lets a command timeout through instead of reconnecting" $
+    withDevice $ \port srv -> do
+      (start, runs) <- counting
+      let silentVolume = deviceThat [("player/get_volume", "")]
+          params = (paramsFor port){commandTimeout = Seconds 0.1}
+      withAsync (forever (serveWith silentVolume srv)) $ \_ -> do
+        bounded (reconnecting params (pure loopback) (\conn -> start >> sendCommand conn (GetVolume (PlayerId 1))))
+          `shouldThrow` (== ConnectionTimeout)
+        runs >>= (`shouldBe` 1)
+
+  -- The device refuses a heartbeat (result=fail). Nobody asked for that
+  -- beat but the connection itself, so the failure is the connection's: a
+  -- dead link, and the daemon reconnects. Today the HeosError escapes the
+  -- background thread, none of the reconnect handlers knows it, and the
+  -- daemon dies.
+  --
+  -- Only the events lane refuses, and that lane's heartbeat is the first
+  -- thread 'together' starts: so today it is its HeosError that wins the
+  -- race and escapes. Were both lanes to refuse, which exception comes out
+  -- would depend on scheduling (see ConnectionSpec, "a refused heartbeat").
+  it "reconnects when the device refuses a heartbeat" $
+    withDevice $ \port srv -> do
+      (start, _) <- counting
+      let refusingBeat = deviceThat [("system/heart_beat", failReply "system/heart_beat" "eid=12&text=System error")]
+          params = (paramsFor port){heartbeatDelay = Seconds 0.05}
+      -- the first connection refuses the beats on its events lane; the
+      -- connections after it behave
+      withAsync (serveLanes refusingBeat echoing srv >> forever (serve srv)) $ \_ -> do
+        result <- bounded $ reconnecting params (pure loopback) $ \_ -> do
+          n <- start
+          if n == 1
+            then forever (threadDelay 1000000)
+            else pure n
+        result `shouldBe` 2
+ where
+  eof = mkIOError eofErrorType "getLine" Nothing Nothing

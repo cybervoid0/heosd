@@ -5,6 +5,7 @@ import Control.Concurrent.STM (TChan, TMVar, TVar)
 import Control.Exception (Exception (..))
 import Control.Retry (RetryPolicyM)
 import Data.Map (Map)
+import Data.Text (Text)
 import Heos.Envelope.Heos (Envelope, HeosEvent)
 import Heos.Time (Seconds)
 import Heos.Types (PlayerId)
@@ -43,12 +44,17 @@ data ConnectionSockets = ConnectionSockets
 getAddr :: HeosConnection -> HostAddress
 getAddr conn = conn.sockets.address
 
+data Waiting = Waiting
+  { path :: Text
+  , box :: TMVar EitherEnvelope
+  }
+
 -- | Everything the two sockets share. The cells are created once per
 --   connection in 'runConnection'; both readers and every sender use them.
 data ConnectionProps = ConnectionProps
   { events :: TChan HeosEvent
   -- ^ broadcast: the reader writes, subscribers read their own copies via 'subscribe'
-  , waiting :: TVar (Map Int (TMVar EitherEnvelope))
+  , waiting :: TVar (Map Int Waiting)
   -- ^ commands in flight, by SEQUENCE: where the reader puts each reply
   , nextSeq :: TVar Int
   -- ^ the one SEQUENCE counter for this connection

@@ -49,7 +49,8 @@ remote = do
           Nothing -> liftIO . putStrLn $ "The player is idle"
       )
     , ("ms", getSources >>= printRes "Music Sources")
-    , ("que", showQueue >>= printRes "Queue")
+    , -- TODO: Сделать форматированный вывод как в поиске, или сделать универсальный форматер который принимает не Found а, например, 4 отдельные поля для вывода на экран
+      ("que", showQueue >>= printRes "Queue")
     ]
   help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ ms (music sources) ‧ s <query> (search) ‧ fp <query> (find & play) ‧ que (tracks queue) ‧ q (quit)"
 
