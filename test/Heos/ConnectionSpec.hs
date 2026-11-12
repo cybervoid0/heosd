@@ -51,6 +51,17 @@ feed = fmap pendingBytes . foldl step ([], emptyPending)
 pendingBytes :: Pending -> ByteString
 pendingBytes tail' = BS.concat (reverse tail'.chunks)
 
+-- ConnectionError carries a SomeException in BackgroundFailure and so has
+-- no Eq: tests match on the constructor instead.
+isConnectionLost, isLineTooLong, isNoPlayers :: ConnectionError -> Bool
+isConnectionLost = \case ConnectionLost -> True; _ -> False
+isLineTooLong = \case LineTooLong -> True; _ -> False
+isNoPlayers = \case NoPlayers -> True; _ -> False
+
+-- What a forked waiter reports once the link is gone.
+failedWithLost :: Maybe (Either ConnectionError a) -> Bool
+failedWithLost = \case Just (Left ConnectionLost) -> True; _ -> False
+
 -- A pair of connected sockets, no network involved. `ours` goes to
 -- runConnection; the test writes into `theirs`, playing the receiver.
 withSocketPair :: ((Socket, Socket) -> IO a) -> IO a
@@ -256,7 +267,7 @@ spec = do
         let stuck = runWith testParams{maxLineLength = 1000} ours $ \(_ :: HeosConnection) -> do
               sendAll theirs (BC.replicate 5000 'x')
               forever (threadDelay 100000)
-        timeout 2000000 stuck `shouldThrow` (== LineTooLong)
+        timeout 2000000 stuck `shouldThrow` isLineTooLong
 
     it "gives every subscriber its own copy of each event" $
       withSocketPair $ \(ours, theirs) ->
@@ -276,7 +287,7 @@ spec = do
         let stuck = run ours $ \(_ :: HeosConnection) -> do
               close theirs
               forever (threadDelay 100000)
-        timeout 2000000 stuck `shouldThrow` (== ConnectionLost)
+        timeout 2000000 stuck `shouldThrow` isConnectionLost
 
   describe "sendCommand" $ do
     it "sends the rendered command with its SEQUENCE and returns the decoded reply" $
@@ -433,7 +444,7 @@ spec = do
           close theirs -- the device goes away
           forever (threadDelay 100000) :: IO ()
         outcome `shouldSatisfy` \o -> case o of Just (Left _) -> True; _ -> False
-        timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
+        timeout 1000000 (takeMVar result) >>= (`shouldSatisfy` failedWithLost)
         conn <- takeMVar connVar
         inFlight conn `shouldReturn` 0
 
@@ -444,7 +455,7 @@ spec = do
           _ <- forkIO (try @ConnectionError (sendCommand conn HeartBeat) >>= putMVar result)
           threadDelay 100000
         -- runConnection returned: the reader was cancelled and failed the waiter
-        timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
+        timeout 1000000 (takeMVar result) >>= (`shouldSatisfy` failedWithLost)
 
     -- The sender is forked first and sends only once the reader is gone:
     -- closing the socket ends runConnection at once, so nothing can be
@@ -456,7 +467,7 @@ spec = do
           _ <- forkIO (threadDelay 100000 >> try @ConnectionError (sendCommand conn HeartBeat) >>= putMVar result)
           close theirs
           forever (threadDelay 100000) :: IO ()
-        timeout 1000000 (takeMVar result) `shouldReturn` Just (Left ConnectionLost)
+        timeout 1000000 (takeMVar result) >>= (`shouldSatisfy` failedWithLost)
 
   -- Stage 21. A 100 ms timeout here; the daemon uses 5 s.
   describe "when the device is silent" $ do
@@ -568,7 +579,7 @@ spec = do
       withLanes $ \sockets dev ->
         withAsync (answeringWith (scripted [("player/get_players", noPlayersLine)]) (const (pure ())) dev.devCommands) $ \_ ->
           runConnection testParams sockets (\props -> readPid sockets.commands props)
-            `shouldThrow` (== NoPlayers)
+            `shouldThrow` isNoPlayers
 
     -- A start-up command that gets no reply means the connection is no good:
     -- it throws rather than carrying on without a player, and the reconnect
@@ -597,7 +608,7 @@ spec = do
     it "ends with ConnectionLost when the device closes the events socket" $
       withLanes $ \sockets dev ->
         runConn testParams sockets (\_ -> close dev.devEvents >> forever (threadDelay 100000) :: IO ())
-          `shouldThrow` (== ConnectionLost)
+          `shouldThrow` isConnectionLost
 
   describe "findBox" $ do
     -- Boxes are TMVars, which compare by identity but have no Show: hence

@@ -1,6 +1,6 @@
 module Heos.Error where
 
-import Control.Exception (Exception (..), IOException)
+import Control.Exception (Exception (..), IOException, SomeException)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -24,11 +24,13 @@ data ConnectionError
   = ConnectionLost
   | LineTooLong
   | NoPlayers
-  deriving (Show, Eq)
+  | BackgroundFailure SomeException
+  deriving (Show)
 instance Exception ConnectionError where
   displayException ConnectionLost = "Heos device closed the connection"
   displayException LineTooLong = "Heos device sent a line longer than allowed"
   displayException NoPlayers = "No Heos players in the local network"
+  displayException (BackgroundFailure e) = "A background thread died: " <> displayException e
 
 data CommandError
   = -- | eid / text

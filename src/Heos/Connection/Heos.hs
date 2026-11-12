@@ -24,6 +24,7 @@ import Control.Exception (
   Exception (fromException),
   IOException,
   SomeAsyncException (SomeAsyncException),
+  SomeException,
   bracket,
   bracket_,
   catch,
@@ -113,10 +114,11 @@ runConnection params (ConnectionSockets _ eSock cSock) act = do
   sendLock <- newMVar ()
   let props = ConnectionProps{events, waiting, nextSeq, sendLock, params}
       -- rethrow all exceptions in the bg threads (except async) - as Connection Error (Connection Lost)
+      dead :: SomeException -> IO a
       dead e
         | Just (SomeAsyncException inner) <- fromException e = throwIO inner
         | Just (ce :: ConnectionError) <- fromException e = throwIO ce
-        | otherwise = throwIO ConnectionLost
+        | otherwise = throwIO (BackgroundFailure e)
 
       -- endless threads run concurrently
       bg =
