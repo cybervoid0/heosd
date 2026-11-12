@@ -26,8 +26,8 @@ remote = do
     line -> fromMaybe (liftIO $ putStrLn help) (lookup line keys)
   guarded act =
     try act >>= \case
-      Left (HeosError eid text) -> liftIO . putStrLn $ "Device refused: " <> maybe "" T.unpack text <> " (eid " <> maybe "?" show eid <> ")"
-      Right () -> pure ()
+      Left (Refused eid text) -> liftIO . putStrLn $ "Device refused: " <> maybe "" T.unpack text <> " (eid " <> maybe "?" show eid <> ")"
+      _ -> pure ()
   printFound = putStrLn . T.unpack . formatFound
   printRes key = liftIO . putStrLn . ((key <> ": ") <>) . show
   keys =
@@ -71,14 +71,14 @@ trim = T.strip . T.pack
 findOne :: (Heos :> es) => Text -> Eff es Found
 findOne query =
   searchTracks query >>= \case
-    [] -> throwIO (ProtocolError "Search result is empty")
+    [] -> throwIO (Unreadable "Search result is empty")
     (track : _) -> pure track
 
 searchTracks :: (Heos :> es) => Text -> Eff es [Found]
 searchTracks query = do
   sourceId <-
     getSearchable kind >>= \case
-      [] -> throwIO $ ProtocolError "No searchable source"
+      [] -> throwIO $ Unreadable "No searchable source"
       (found : _) -> pure found
   search sourceId kind query
  where

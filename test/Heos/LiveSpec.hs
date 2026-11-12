@@ -21,7 +21,8 @@ import Heos.Connection.Heos (runConnection)
 import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
 import Heos.Device (Catalogue (..), Device (..), LiveState (..))
 import Heos.Effect.Heos
-import Heos.Envelope.Heos (HeosError (..), ProtocolError, decodePayload)
+import Heos.Envelope.Heos (decodePayload)
+import Heos.Error (CommandError (..))
 import Heos.FakeDevice (answering, answeringWith, commandPath, commandQuery, failReply, fixture, replyTo, scripted)
 import Heos.Handler.Live (runHeosLive)
 import Heos.Time (Seconds (..))
@@ -87,8 +88,8 @@ sent = map (\l -> (commandPath l, dropSeq (commandQuery l)))
  where
   dropSeq q = BS.intercalate "&" [p | p <- BC.split '&' q, not ("SEQUENCE=" `BS.isPrefixOf` p)]
 
-isProtocolError :: ProtocolError -> Bool
-isProtocolError _ = True
+isUnreadable :: CommandError -> Bool
+isUnreadable = \case Unreadable _ -> True; _ -> False
 
 spec :: Spec
 spec = describe "runHeosLife" $ do
@@ -133,7 +134,7 @@ spec = describe "runHeosLife" $ do
     it "a refused playItem throws the device's error" $ do
       let refused = scripted [("browse/add_to_queue", failReply "browse/add_to_queue" "eid=14&text=cannot play")]
       withLive refused (playItem (PlayContainer (SourceId 10) (ContainerId "443242286")))
-        `shouldThrow` (== HeosError{eid = Just 14, text = Just "cannot play"})
+        `shouldThrow` (== Refused (Just 14) (Just "cannot play"))
 
     -- The first replaces the queue and starts, the rest line up behind it.
     it "playAll replaces the queue with the first item and appends the rest" $ do
@@ -152,8 +153,8 @@ spec = describe "runHeosLife" $ do
       map (.song) (take 2 items) `shouldBe` ["Heaven's Gonna Burn Your Eyes", "Facing East"]
       map (.qid) (take 2 items) `shouldBe` [QueueId 1, QueueId 2]
 
-    it "a queue reply without payload is a ProtocolError" $
-      withLive replyTo showQueue `shouldThrow` isProtocolError
+    it "a queue reply without payload is Unreadable" $
+      withLive replyTo showQueue `shouldThrow` isUnreadable
 
   -- Stage 30's check: "what plays" is answered at once, from the cache the
   -- tracker keeps, and the device is not asked.
@@ -180,10 +181,10 @@ spec = describe "runHeosLife" $ do
       cmds `shouldBe` []
 
   describe "replies coming back" $ do
-    -- A reply the handler cannot make sense of is a ProtocolError, not a
+    -- A reply the handler cannot make sense of is Unreadable, not a
     -- silent default: here the device answered the search without results.
-    it "a reply without payload where one is expected is a ProtocolError" $
-      withLive replyTo (search (SourceId 10) TrackKind "x") `shouldThrow` isProtocolError
+    it "a reply without payload where one is expected is Unreadable" $
+      withLive replyTo (search (SourceId 10) TrackKind "x") `shouldThrow` isUnreadable
 
   describe "search" $ do
     -- Which sources can take the search is known since start-up too: from
@@ -217,8 +218,8 @@ spec = describe "runHeosLife" $ do
           (search (SourceId 10) PlaylistKind "chill")
       map snd (sent cmds) `shouldBe` ["sid=10&search=chill&scid=6"]
 
-    it "fails with a ProtocolError, without searching, when the source has no such criterion" $ do
-      withLive replyTo (search (SourceId 3) TrackKind "x") `shouldThrow` isProtocolError
+    it "fails with Unreadable, without searching, when the source has no such criterion" $ do
+      withLive replyTo (search (SourceId 3) TrackKind "x") `shouldThrow` isUnreadable
 
-    it "fails with a ProtocolError, without searching, for a source the device does not list" $ do
-      withLive replyTo (search (SourceId 99) TrackKind "x") `shouldThrow` isProtocolError
+    it "fails with Unreadable, without searching, for a source the device does not list" $ do
+      withLive replyTo (search (SourceId 99) TrackKind "x") `shouldThrow` isUnreadable

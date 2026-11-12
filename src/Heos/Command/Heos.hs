@@ -1,4 +1,5 @@
 {-# LANGUAGE StandaloneDeriving #-}
+
 module Heos.Command.Heos where
 
 import Control.Exception (throwIO)
@@ -10,7 +11,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
-import Heos.Envelope.Heos (HeosHeader (..), ProtocolError (..), decodePayload, fromMessage)
+import Heos.Envelope.Heos (HeosHeader (..), decodePayload, fromMessage)
+import Heos.Error (CommandError (..))
 import Heos.ToParam (ToParam (..), (.=), (.=?))
 import Heos.Types (ContainerId, Credentials (..), Envelope (..), GroupId, MediaId, MusicSource, OnOff, PlayState, Player, PlayerId, QueueId, QueueItem, QueueMode, RepeatMode, SearchCriteriaId, SearchCriterion, SearchResult, SourceId, Track, UpdateState, parseOnOff, parsePlayState, parseRepeatMode, parseUpdateState)
 import Heos.Url (UrlPair (..), decodeQuery, lookupParam, renderCommandUrl)
@@ -194,7 +196,7 @@ decodeReply env = \case
   readText :: (Read a) => Text -> Maybe a
   readText = readMaybe . T.unpack
   inPayload :: Text -> Maybe a -> IO a
-  inPayload key = maybe (throwIO (ProtocolError ("no " <> key <> " in payload"))) pure
+  inPayload key = maybe (throwIO (Unreadable ("no " <> key <> " in payload"))) pure
 
 -- Convert all existing HEOS commands with arguments to an intermediate data representation for further rendering
 commandParts :: Command a -> (Text, [UrlPair])

@@ -15,8 +15,9 @@ import Data.Text.Encoding qualified as T
 import Heos.Command.Heos (Command (..))
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk, splitLines)
 import Heos.Connection.Heos (findBox, readPid, runConnection, sendCommand, subscribe)
-import Heos.Connection.Types (ConnectionError (..), ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..), Waiting (..))
-import Heos.Envelope.Heos (HeosError (..), HeosEvent (..))
+import Heos.Connection.Types (ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..), Waiting (..))
+import Heos.Envelope.Heos (HeosEvent (..))
+import Heos.Error (CommandError (..), ConnectionError (..))
 import Heos.FakeDevice (answering, answeringWith, commandPath, failReply, fixture, messageReply, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Types
@@ -307,7 +308,7 @@ spec = do
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn ->
           exchange conn theirs GetPlayers (const (pure ())) [failedLine]
-            `shouldThrow` (== HeosError{eid = Just 2, text = Just "ID Not Valid"})
+            `shouldThrow` (== Refused (Just 2) (Just "ID Not Valid"))
 
     -- The case that used to be swallowed: nothing to decode, so the fail
     -- would have come back as a plain ().
@@ -315,13 +316,13 @@ spec = do
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn ->
           exchange conn theirs HeartBeat (const (pure ())) [failedBeatLine]
-            `shouldThrow` (== HeosError{eid = Just 12, text = Just "System error"})
+            `shouldThrow` (== Refused (Just 12) (Just "System error"))
 
     it "a failed reply without a message is still a failure" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn ->
           exchange conn theirs HeartBeat (const (pure ())) [failedMuteLine]
-            `shouldThrow` (== HeosError{eid = Nothing, text = Nothing})
+            `shouldThrow` (== Refused Nothing Nothing)
 
     it "nothing is in flight before a command and after its reply" $
       withSocketPair $ \(ours, theirs) ->
@@ -459,11 +460,11 @@ spec = do
 
   -- Stage 21. A 100 ms timeout here; the daemon uses 5 s.
   describe "when the device is silent" $ do
-    it "gives up with ConnectionTimeout and leaves nothing in flight" $
+    it "gives up with NoReply and leaves nothing in flight" $
       withSocketPair $ \(ours, _) ->
         runWith testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
-          outcome <- timeout 2000000 (try @ConnectionError (sendCommand conn HeartBeat))
-          outcome `shouldBe` Just (Left ConnectionTimeout)
+          outcome <- timeout 2000000 (try @CommandError (sendCommand conn HeartBeat))
+          outcome `shouldBe` Just (Left NoReply)
           inFlight conn `shouldReturn` 0
 
     -- The reply to the abandoned command turns up late: nobody waits for it
@@ -471,7 +472,7 @@ spec = do
     it "drops the late reply and serves the next command" $
       withSocketPair $ \(ours, theirs) ->
         runWith testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
-          _ <- try @ConnectionError (sendCommand conn HeartBeat) -- times out
+          _ <- try @CommandError (sendCommand conn HeartBeat) -- times out
           _ <- recv theirs 4096 -- the device finally reads the abandoned command...
           sendAll theirs heartBeatLine -- ...and answers it, too late
           threadDelay 50000
@@ -483,12 +484,12 @@ spec = do
     -- has no arguments, and the device composes "level=" itself, NOTES), so
     -- "the only box in flight" is not enough to tell them apart: only the
     -- command the reply names is. Today the heart_beat reply lands in the
-    -- get_volume box and the caller gets a ProtocolError for a reply that
+    -- get_volume box and the caller gets an Unreadable for a reply that
     -- was never meant for it.
     it "does not hand a late reply to the next command just because it is the only one in flight" $
       withSocketPair $ \(ours, theirs) ->
         runWith testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
-          _ <- try @ConnectionError (sendCommand conn HeartBeat) -- times out
+          _ <- try @CommandError (sendCommand conn HeartBeat) -- times out
           _ <- recv theirs 4096 -- the device reads the abandoned heart_beat
           -- the device reads get_volume, so the box is registered by now, and
           -- only then answers: the late beat first, the real reply after
@@ -501,10 +502,10 @@ spec = do
     it "does not let a late success stand in for the reply to a command the device then refuses" $
       withSocketPair $ \(ours, theirs) ->
         runWith testParams{commandTimeout = Seconds 0.1} ours $ \conn -> do
-          _ <- try @ConnectionError (sendCommand conn HeartBeat) -- times out
+          _ <- try @CommandError (sendCommand conn HeartBeat) -- times out
           _ <- recv theirs 4096 -- the device reads the abandoned heart_beat
           exchange conn theirs (SetVolume (PlayerId 1) 20) (const (pure ())) [heartBeatLine, failReply "player/set_volume" "eid=9&text=Out of range"]
-            `shouldThrow` (== HeosError{eid = Just 9, text = Just "Out of range"})
+            `shouldThrow` (== Refused (Just 9) (Just "Out of range"))
 
   -- Stage 22. Heartbeats every 50 ms here; the daemon sends one every 30 s.
   describe "heartbeat" $ do
@@ -535,7 +536,7 @@ spec = do
     -- one. Nobody outside asked for the beat, so the device's reply is of
     -- no use to anyone: what comes out of the connection must say "the
     -- link is gone", in the one type 'withReconnect' acts on. Today the
-    -- HeosError itself escapes; and with both lanes refusing, which
+    -- Refused itself escapes; and with both lanes refusing, which
     -- exception escapes depends on which heartbeat went first: the other
     -- one, cancelled mid-flight, gets ConnectionLost from the readers'
     -- clean-up and may win the race. The error of a background thread
@@ -563,19 +564,19 @@ spec = do
 
     -- No players yet (the device is still coming up): a ConnectionError,
     -- so the reconnect loop tries again.
-    it "ends with PlayerNotFound when the list is empty" $
+    it "ends with NoPlayers when the list is empty" $
       withLanes $ \sockets dev ->
         withAsync (answeringWith (scripted [("player/get_players", noPlayersLine)]) (const (pure ())) dev.devCommands) $ \_ ->
           runConnection testParams sockets (\props -> readPid sockets.commands props)
-            `shouldThrow` (== PlayerNotFound)
+            `shouldThrow` (== NoPlayers)
 
     -- A start-up command that gets no reply means the connection is no good:
     -- it throws rather than carrying on without a player, and the reconnect
     -- loop takes it from there.
-    it "ends with ConnectionTimeout when the device doesn't answer" $
+    it "ends with NoReply when the device doesn't answer" $
       withLanes $ \sockets _ ->
         runConnection testParams{commandTimeout = Seconds 0.1} sockets (\props -> readPid sockets.commands props)
-          `shouldThrow` (== ConnectionTimeout)
+          `shouldThrow` (== NoReply)
 
   describe "two sockets" $ do
     it "sends commands over the commands socket only" $

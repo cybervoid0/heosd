@@ -12,7 +12,7 @@ import Heos.Command.Heos (Command (..))
 import Heos.Connection (HeosConnection (..), sendCommand)
 import Heos.Device (Catalogue (..), Device (..), LiveState (..), searchable)
 import Heos.Effect.Heos (Heos (..))
-import Heos.Envelope.Heos (ProtocolError (..))
+import Heos.Error (CommandError (..))
 import Heos.Types
 
 runHeosLive :: (IOE :> es) => Device -> Eff (Heos : es) a -> Eff es a
@@ -48,4 +48,4 @@ runHeosLive device = interpret_ $ \case
   call :: Command a -> IO a
   call = sendCommand device.heos
   vCall = void . call
-  orProtocol msg = maybe (throwIO (ProtocolError msg)) pure
+  orProtocol msg = maybe (throwIO (Unreadable msg)) pure

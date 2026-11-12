@@ -21,9 +21,12 @@ import Control.Concurrent.STM (
   writeTVar,
  )
 import Control.Exception (
+  Exception (fromException),
   IOException,
+  SomeAsyncException (SomeAsyncException),
   bracket,
   bracket_,
+  catch,
   finally,
   handle,
   throwIO,
@@ -41,7 +44,6 @@ import Data.Void (Void, absurd)
 import Heos.Command.Heos (Command (..), commandParts, decodeReply, renderCommand)
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Connection.Types (
-  ConnectionError (..),
   ConnectionProps (..),
   ConnectionSockets (ConnectionSockets, commands),
   EitherEnvelope,
@@ -57,6 +59,7 @@ import Heos.Envelope.Heos (
   classifyEnvelope,
   findError,
  )
+import Heos.Error (CommandError (..), ConnectionError (..))
 import Heos.Time (toMicros)
 import Heos.Types
 import Heos.Url (decodeQuery, lookupParam)
@@ -68,15 +71,16 @@ import Text.Read (readMaybe)
 readPid :: Socket -> ConnectionProps -> IO PlayerId
 readPid connSock props = do
   players :: [Player] <- sendOn connSock props GetPlayers
-  player <- maybe (throwIO PlayerNotFound) pure (listToMaybe players)
+  player <- maybe (throwIO NoPlayers) pure (listToMaybe players)
   pure player.pid
 
 -- | One TCP socket connected to the address, closed when the action is
 --   done, however it ends.
 withSocket :: SockAddr -> (Socket -> IO a) -> IO a
-withSocket addr act = bracket open close $ \s -> connect s addr >> act s
+withSocket addr act = bracket open close $ \s -> connectOrLost s >> act s
  where
   open = socket AF_INET Stream defaultProtocol
+  connectOrLost s = connect s addr `catch` \(_ :: IOException) -> throwIO ConnectionLost
 
 -- | Open both sockets to the device, run the start-up sequence, then the
 --   action. Both sockets are closed when the action is done. Everything
@@ -108,14 +112,21 @@ runConnection params (ConnectionSockets _ eSock cSock) act = do
   nextSeq <- newTVarIO @Int 0
   sendLock <- newMVar ()
   let props = ConnectionProps{events, waiting, nextSeq, sendLock, params}
-  -- endless threads run concurrently
-  let bg =
-        together
-          [ heartBeat eSock props -- heartBeat для событий
-          , heartBeat cSock props -- heartBeat для команд
-          , reader eSock props -- reader для событий
-          , reader cSock props -- reader для команд
-          ]
+      -- rethrow all exceptions in the bg threads (except async) - as Connection Error (Connection Lost)
+      dead e
+        | Just (SomeAsyncException inner) <- fromException e = throwIO inner
+        | Just (ce :: ConnectionError) <- fromException e = throwIO ce
+        | otherwise = throwIO ConnectionLost
+
+      -- endless threads run concurrently
+      bg =
+        handle dead $
+          together
+            [ heartBeat eSock props -- heartBeat для событий
+            , heartBeat cSock props -- heartBeat для команд
+            , reader eSock props -- reader для событий
+            , reader cSock props -- reader для команд
+            ]
   res <- race bg (act props)
   either absurd pure res
 
@@ -210,7 +221,7 @@ sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
       sendAll sock (renderCommand seqNo cmd)
     -- `reader` уже получил ответ на эту команду и положил в ячейку, нужно её
     -- достать и вернуть, а в случае если не уложились в таймаут - бросить исключение
-    env <- timeout (toMicros props.params.commandTimeout) (atomically $ takeTMVar box) >>= maybe (throwIO ConnectionTimeout) (either throwIO pure)
+    env <- timeout (toMicros props.params.commandTimeout) (atomically $ takeTMVar box) >>= maybe (throwIO NoReply) (either throwIO pure)
 
     case (env.heos.result, env.heos.message) of
       (Just Fail, mbMsg) -> throwIO (findError (fromMaybe "" mbMsg))

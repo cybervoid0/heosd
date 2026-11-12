@@ -1,11 +1,12 @@
 module Heos.Discovery (discover, DiscoveryError (..), filterDatagrams) where
 
-import Control.Exception (Exception, IOException, bracket, try)
+import Control.Exception (IOException, bracket, try)
 import Data.ByteString.Char8 qualified as BS
 import Data.List (partition)
 import Data.List.NonEmpty (NonEmpty (..), nonEmpty, nub)
 import Data.Maybe (mapMaybe)
-import GHC.Exception (displayException)
+
+import Heos.Error (DiscoveryError (..))
 import Network.Socket (
   Family (AF_INET),
   HostAddress,
@@ -19,20 +20,6 @@ import Network.Socket (
  )
 import Network.Socket.ByteString (recvFrom, sendAllTo)
 import System.Timeout (timeout)
-
-data DiscoveryError
-  = -- socket/sendAllTo failed: no network, no route to multicast, EPERM
-    SocketFailure IOException
-  | -- not a single datagram arrived before collect timed out
-    NoResponse
-  | -- replies arrived, but none is from ACT-Denon (foreign SSDP devices:
-    -- router, TV, Chromecast); the addresses are useful in the log
-    NoHeosDevice (NonEmpty SockAddr)
-  deriving (Show, Eq)
-instance Exception DiscoveryError where
-  displayException (SocketFailure e) = "Socket failure: " <> show e
-  displayException NoResponse = "No response"
-  displayException (NoHeosDevice addr) = "Found non-Heos device: " <> show addr
 
 type DiscoveryResult = Either DiscoveryError (NonEmpty HostAddress)
 type Datagram = (BS.ByteString, SockAddr)

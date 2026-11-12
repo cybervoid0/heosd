@@ -10,7 +10,8 @@ import Data.ByteString.Char8 qualified as BC
 import Data.Either (isLeft)
 import Effectful (runEff)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
-import Heos.Connection.Avr (AvrConnection, AvrConnectionError (..), AvrConnectionParams (..), answerOf, sendAvrCommand, withAvr)
+import Heos.Connection.Avr (AvrConnection, AvrConnectionParams (..), answerOf, sendAvrCommand, withAvr)
+import Heos.Error (AvrError (..))
 import Heos.Effect.Avr (getPower, turnOff)
 import Heos.Envelope.Avr (decodeAvrLine)
 import Heos.Handler.AvrLive (runAvrLive)
@@ -163,7 +164,7 @@ spec = do
 
     it "times out when the device stays silent" $ do
       (result, _) <- withAmp (replying (const "")) $ \conn -> try (sendAvrCommand conn GetPower)
-      result `shouldBe` Left AvrConnectionTimeout
+      result `shouldBe` Left AvrNoReply
 
     -- A closed socket surfaces as an IO error, the kind withReconnect
     -- restarts both connections on.

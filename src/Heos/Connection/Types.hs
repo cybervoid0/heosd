@@ -2,21 +2,14 @@ module Heos.Connection.Types where
 
 import Control.Concurrent (MVar)
 import Control.Concurrent.STM (TChan, TMVar, TVar)
-import Control.Exception (Exception (..))
 import Control.Retry (RetryPolicyM)
 import Data.Map (Map)
 import Data.Text (Text)
 import Heos.Envelope.Heos (Envelope, HeosEvent)
+import Heos.Error (ConnectionError)
 import Heos.Time (Seconds)
 import Heos.Types (PlayerId)
 import Network.Socket (HostAddress, PortNumber, Socket)
-
-data ConnectionError = ConnectionLost | ConnectionTimeout | LineTooLong | PlayerNotFound deriving (Show, Eq)
-instance Exception ConnectionError where
-  displayException ConnectionLost = "the device closed the connection"
-  displayException ConnectionTimeout = "the device did not answer in time"
-  displayException LineTooLong = "the device sent a line longer than allowed"
-  displayException PlayerNotFound = "no HEOS players in the local network"
 
 type EitherEnvelope = Either ConnectionError Envelope
 

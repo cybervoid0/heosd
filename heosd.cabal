@@ -101,6 +101,7 @@ library
                       Heos.Connection.Types
                       Heos.Effect.Heos
                       Heos.Effect.Avr
+                      Heos.Error
                       Heos.Handler.Live
                       Heos.Handler.AvrLive
                       Heos.Handler.Fake

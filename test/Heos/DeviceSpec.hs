@@ -18,7 +18,7 @@ import Heos.Connection.Heos (runConnection, subscribe)
 import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
 import Data.Text (Text)
 import Heos.Device (Catalogue (..), LiveState (..), initialize, searchable, tracker)
-import Heos.Envelope.Heos (ProtocolError (..))
+import Heos.Error (CommandError (..))
 import Heos.FakeDevice (answeringWith, commandPath, commandQuery, failReply, fixture, messageReply, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Types
@@ -214,14 +214,14 @@ spec = do
       live.playState `shouldBe` Play
       fmap (.song) live.nowPlaying `shouldBe` Just "Lebanese Blonde"
 
-    -- A start-up reply the daemon cannot make sense of is a ProtocolError:
+    -- A start-up reply the daemon cannot make sense of is Unreadable:
     -- half a state is no state.
-    it "fails with a ProtocolError when a reply has no payload" $ do
+    it "fails with Unreadable when a reply has no payload" $ do
       reply <- startUpReplies
       let broken line
             | commandPath line == "browse/get_music_sources" = messageReply "browse/get_music_sources" ""
             | otherwise = reply line
-      withStartUp broken `shouldThrow` (\(ProtocolError _) -> True)
+      withStartUp broken `shouldThrow` (\case Unreadable _ -> True; _ -> False)
 
   -- Stage 30's check: "what plays" is answered from the cache, so the cache
   -- has to follow the device. The events carry volume and play state
@@ -280,8 +280,8 @@ spec = do
 
     -- The device refuses the query (result=fail). That is the device's
     -- answer, not a dead link: the tracker notes it and goes on. Today the
-    -- HeosError kills the tracker, the race cancels the user's action, and
-    -- since HeosError is not one of the reconnect handlers' exceptions, the
+    -- Refused kills the tracker, the race cancels the user's action, and
+    -- since CommandError is not one of the reconnect handlers' exceptions, the
     -- whole daemon dies over one refused command.
     it "survives a now-playing reply the device refuses" $ do
       reply <- startUpReplies
@@ -298,7 +298,7 @@ spec = do
 
     -- The device never answers the query. Whether the link is alive is the
     -- heartbeat's call, not the tracker's: it gives up on this track and
-    -- goes on with the next event. Today the ConnectionTimeout kills the
+    -- goes on with the next event. Today the NoReply kills the
     -- tracker, and with it the connection.
     it "survives a now-playing query the device never answers" $ do
       reply <- startUpReplies

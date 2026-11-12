@@ -10,7 +10,8 @@ import Data.ByteString (ByteString)
 import Heos.Command.Heos (Command (..))
 import Heos.Connection.Heos (sendCommand)
 import Heos.Connection.Reconnect (reconnecting)
-import Heos.Connection.Types (ConnectionError (..), HeosConnectionParams (..))
+import Heos.Connection.Types (HeosConnectionParams (..))
+import Heos.Error (CommandError (..), ConnectionError (..))
 import Heos.Discovery (DiscoveryError (..))
 import Heos.FakeDevice (answeringWith, failReply, playersLine)
 import Heos.FakeDevice qualified as Fake
@@ -244,7 +245,7 @@ spec = describe "reconnecting" $ do
   -- heartbeat still gets through, the sockets are fine. The caller gets
   -- the timeout and decides what to do; tearing down both sockets, the
   -- telnet session and running discovery again over a slow search is not
-  -- it. Today ConnectionTimeout is retried wherever it was thrown.
+  -- it. Today NoReply is retried wherever it was thrown.
   it "lets a command timeout through instead of reconnecting" $
     withDevice $ \port srv -> do
       (start, runs) <- counting
@@ -252,17 +253,17 @@ spec = describe "reconnecting" $ do
           params = (paramsFor port){commandTimeout = Seconds 0.1}
       withAsync (forever (serveWith silentVolume srv)) $ \_ -> do
         bounded (reconnecting params (pure loopback) (\conn -> start >> sendCommand conn (GetVolume (PlayerId 1))))
-          `shouldThrow` (== ConnectionTimeout)
+          `shouldThrow` (== NoReply)
         runs >>= (`shouldBe` 1)
 
   -- The device refuses a heartbeat (result=fail). Nobody asked for that
   -- beat but the connection itself, so the failure is the connection's: a
-  -- dead link, and the daemon reconnects. Today the HeosError escapes the
+  -- dead link, and the daemon reconnects. Today the Refused escapes the
   -- background thread, none of the reconnect handlers knows it, and the
   -- daemon dies.
   --
   -- Only the events lane refuses, and that lane's heartbeat is the first
-  -- thread 'together' starts: so today it is its HeosError that wins the
+  -- thread 'together' starts: so today it is its Refused that wins the
   -- race and escapes. Were both lanes to refuse, which exception comes out
   -- would depend on scheduling (see ConnectionSpec, "a refused heartbeat").
   it "reconnects when the device refuses a heartbeat" $

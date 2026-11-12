@@ -6,6 +6,7 @@ import Data.Either (isLeft, isRight)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Heos.Envelope.Heos
+import Heos.Error (CommandError (..))
 import Heos.Url (UrlParam (..), decodeQuery, lookupParam, makePair)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
@@ -186,33 +187,33 @@ spec = do
 
       it "fail extracts eid and text" $
         outcomeOfFail (Just "eid=2&text=ID Not Valid&pid=9")
-          `shouldBe` Failed (HeosError (Just 2) (Just "ID Not Valid"))
+          `shouldBe` Failed (Refused (Just 2) (Just "ID Not Valid"))
 
       it "fail finds eid and text in any order" $
         outcomeOfFail (Just "pid=9&text=Oops&eid=13")
-          `shouldBe` Failed (HeosError (Just 13) (Just "Oops"))
+          `shouldBe` Failed (Refused (Just 13) (Just "Oops"))
 
       it "fail unescapes the text" $
         outcomeOfFail (Just "eid=1&text=A%26B%3DC")
-          `shouldBe` Failed (HeosError (Just 1) (Just "A&B=C"))
+          `shouldBe` Failed (Refused (Just 1) (Just "A&B=C"))
 
       it "fail without eid is still Failed" $
-        outcomeOfFail (Just "text=Oops") `shouldBe` Failed (HeosError Nothing (Just "Oops"))
+        outcomeOfFail (Just "text=Oops") `shouldBe` Failed (Refused Nothing (Just "Oops"))
 
       it "fail with a non-numeric eid is still Failed, without eid" $
-        outcomeOfFail (Just "eid=abc&text=Oops") `shouldBe` Failed (HeosError Nothing (Just "Oops"))
+        outcomeOfFail (Just "eid=abc&text=Oops") `shouldBe` Failed (Refused Nothing (Just "Oops"))
 
       it "fail with eid as a bare flag has no eid" $
-        outcomeOfFail (Just "eid&text=Oops") `shouldBe` Failed (HeosError Nothing (Just "Oops"))
+        outcomeOfFail (Just "eid&text=Oops") `shouldBe` Failed (Refused Nothing (Just "Oops"))
 
       it "fail without text is still Failed" $
-        outcomeOfFail (Just "eid=2") `shouldBe` Failed (HeosError (Just 2) Nothing)
+        outcomeOfFail (Just "eid=2") `shouldBe` Failed (Refused (Just 2) Nothing)
 
       it "fail with an empty message is still Failed" $
-        outcomeOfFail (Just "") `shouldBe` Failed (HeosError Nothing Nothing)
+        outcomeOfFail (Just "") `shouldBe` Failed (Refused Nothing Nothing)
 
       it "fail without a message is still Failed" $
-        outcomeOfFail Nothing `shouldBe` Failed (HeosError Nothing Nothing)
+        outcomeOfFail Nothing `shouldBe` Failed (Refused Nothing Nothing)
 
       it "pending wins over fail" $ do
         let env = envelopeWith (Just Fail) "browse/search" (Just "command under process&eid=2")
@@ -256,4 +257,5 @@ describeKind = \case
   IncomingEvent (HeosEvent name _) _ -> "event " <> T.unpack name
   IncomingPending _ -> "pending"
   IncomingResponse Succeeded _ -> "succeeded"
-  IncomingResponse (Failed e) _ -> "failed eid=" <> show e.eid <> " text=" <> show e.text
+  IncomingResponse (Failed (Refused eid text)) _ -> "failed eid=" <> show eid <> " text=" <> show text
+  IncomingResponse (Failed e) _ -> "failed " <> show e

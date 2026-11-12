@@ -6,6 +6,7 @@ module Heos (
   module Heos.Effect.Avr,
   module Heos.Envelope.Heos,
   module Heos.Envelope.Avr,
+  module Heos.Error,
   module Heos.Handler.Live,
   module Heos.Handler.AvrLive,
   module Heos.Time,
@@ -25,6 +26,7 @@ import Heos.Effect.Avr
 import Heos.Effect.Heos
 import Heos.Envelope.Avr
 import Heos.Envelope.Heos
+import Heos.Error
 import Heos.Handler.AvrLive
 import Heos.Handler.Live
 import Heos.Time

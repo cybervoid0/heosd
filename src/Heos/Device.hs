@@ -2,7 +2,7 @@ module Heos.Device where
 
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
-import Control.Exception (handle)
+import Control.Exception (Exception (displayException), handle)
 import Control.Monad (forM, forM_, forever)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -15,7 +15,8 @@ import Heos.Connection.Avr (AvrConnection)
 import Heos.Connection.Heos (sendOn)
 import Heos.Connection.Types (ConnectionSockets (..))
 import Heos.Device.Parameters
-import Heos.Envelope.Heos (HeosEvent (HeosEvent), ProtocolError (..))
+import Heos.Envelope.Heos (HeosEvent (HeosEvent))
+import Heos.Error (CommandError (..))
 import Heos.Types
 import Heos.Url (lookupParam)
 import Text.Read (readMaybe)
@@ -72,7 +73,8 @@ tracker chan state conn =
         atomically $ modifyTVar' state $ \s -> s{nowPlaying}
       _ -> pure ()
  where
-  skipBadReply (ProtocolError msg) = putStrLn ("now playing: " <> T.unpack msg)
+  skipBadReply :: CommandError -> IO ()
+  skipBadReply e = putStrLn ("now playing: " <> displayException e)
 
 -- | The start-up sequence the vendor prescribes: events off, the state
 --   queries, events on. Subscription commands go over the events socket,
