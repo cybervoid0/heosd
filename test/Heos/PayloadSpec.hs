@@ -11,7 +11,6 @@ import Data.List (find)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Heos.Envelope.Heos (Envelope (..))
 import Heos.Types
 import System.FilePath ((</>))
 import Test.Hspec
