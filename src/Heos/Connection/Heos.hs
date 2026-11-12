@@ -84,8 +84,7 @@ withSocket addr act = bracket open close $ \s -> connectOrLost s >> act s
   connectOrLost s = connect s addr `catch` \(_ :: IOException) -> throwIO ConnectionLost
 
 -- | Open both sockets to the device, run the start-up sequence, then the
---   action. Both sockets are closed when the action is done. Everything
---   but the sockets is 'runConnection'.
+--   action.
 withConnection :: HeosConnectionParams -> (HeosConnection -> IO a) -> HostAddress -> IO a
 withConnection params act hostAddr =
   let sockAddr = SockAddrInet params.port hostAddr
@@ -100,12 +99,11 @@ withConnection params act hostAddr =
 together :: [IO Void] -> IO Void
 together = runConcurrently . asum . map Concurrently
 
--- | Run the action over two already connected sockets: create the shared
---   cells, start a reader and a heartbeat per socket, hand out the
---   'Connection'. The background threads are killed when the action is
---   done; if one of them dies first (the device closed a socket), the
---   action is cancelled and the error propagates. Takes sockets rather
---   than an address so tests can pass their own.
+-- | Run the action over two connected sockets: shared cells, a reader
+--   and a heartbeat per socket. The background threads die with the
+--   action; if one of them dies first, the action is cancelled and the
+--   error surfaces as a 'ConnectionError'. Takes sockets, not an
+--   address, so tests can pass their own.
 runConnection :: HeosConnectionParams -> ConnectionSockets -> (ConnectionProps -> IO a) -> IO a
 runConnection params (ConnectionSockets _ eSock cSock) act = do
   events <- newBroadcastTChanIO
@@ -113,7 +111,7 @@ runConnection params (ConnectionSockets _ eSock cSock) act = do
   nextSeq <- newTVarIO @Int 0
   sendLock <- newMVar ()
   let props = ConnectionProps{events, waiting, nextSeq, sendLock, params}
-      -- rethrow all exceptions in the bg threads (except async) - as Connection Error (Connection Lost)
+      -- rethrow all exceptions in the bg threads (except async) - as Connection Error (BackgroundFailure)
       dead :: SomeException -> IO a
       dead e
         | Just (SomeAsyncException inner) <- fromException e = throwIO inner
@@ -132,16 +130,12 @@ runConnection params (ConnectionSockets _ eSock cSock) act = do
   res <- race bg (act props)
   either absurd pure res
 
--- | The reader thread for one socket: the only one that reads it. Cuts the
---   stream into lines, decodes each and routes it: events go to
---   subscribers, replies go to the box 'findBox' picks, "command under
---   process" notices are dropped. The same code serves both sockets, since
---   the events socket also gets replies to its own commands. A reply with no box to go to is a stray (late, or
---   unsolicited): it is logged and dropped, never kept for the next command.
---   Never returns; an empty recv means the device closed the connection,
---   and that is an error, not a reason to spin. Cutting the stream into
---   lines is 'feedChunk'; a line that outgrows 'maxLineLength' without
---   ending is a broken link, 'LineTooLong', so the buffer stays bounded.
+-- | The only thread that reads this socket. Cuts the stream into lines
+--   and routes each: events to subscribers, replies to the box 'findBox'
+--   picks, strays and "command under process" dropped. An empty recv is
+--   the device hanging up: 'ConnectionLost', and every waiting box gets
+--   it too. A line longer than 'maxLineLength' is 'LineTooLong', so the
+--   buffer stays bounded.
 reader :: Socket -> ConnectionProps -> IO Void
 reader sock conn = go emptyPending `finally` failAll
  where
@@ -173,10 +167,11 @@ reader sock conn = go emptyPending `finally` failAll
     forM_ mapping $ \waiting -> tryPutTMVar waiting.box (Left ConnectionLost)
     writeTVar conn.waiting Map.empty
 
--- | Which waiting box a reply belongs to. A reply carries SEQUENCE only
---   when the command had arguments of its own (the device echoes them);
---   without it, the reply can only be for the single command in flight,
---   which 'sendLock' guarantees. Nothing means nobody is waiting for it.
+-- | Which waiting box a reply belongs to. SEQUENCE is echoed only when
+--   the command had arguments; without it, the single box in flight is
+--   the candidate ('sendLock' allows one). Either way the box must wait
+--   for the same command path: a late reply to an abandoned command
+--   never stands in for the next one. Nothing means nobody is waiting.
 findBox :: Text -> Maybe Text -> Map Int Waiting -> Maybe (TMVar EitherEnvelope)
 findBox cmdPath mbMsg boxes = (.box) <$> (candidate >>= same)
  where
@@ -186,24 +181,17 @@ findBox cmdPath mbMsg boxes = (.box) <$> (candidate >>= same)
   same w = if w.path == cmdPath then Just w else Nothing
   seqNo = mbMsg >>= lookupParam "SEQUENCE" . decodeQuery >>= readMaybe . T.unpack
 
--- | A private copy of the event stream. Each call gets its own copy, so
---   subscribers don't steal events from each other. Only events arriving
---   after the call are seen: subscribe before you ask the device for them.
---
---   The copy is unbounded: every event stays in it until read. Subscribe
---   only from a thread that keeps reading for as long as it holds the
---   channel; a copy that is dropped costs nothing, a copy that is kept but
---   not read grows with every event.
+-- | A private copy of the event stream, seeing only events from now on.
+--   The copy is unbounded: subscribe from a thread that keeps reading
+--   as long as it holds the channel, or the copy grows with every event.
 subscribe :: HeosConnection -> IO (TChan HeosEvent)
 subscribe conn = atomically $ dupTChan conn.props.events
 
--- | Send a command over the given socket and wait for its reply; throws
---   'ConnectionError' when there is none. Takes 'sendLock' for the whole
---   exchange, so commands go one at a time: replies without SEQUENCE
---   (get_players, heart_beat) can then only mean the one in flight. The box
---   is registered under the SEQUENCE number before sending, otherwise a
---   fast reply could arrive before anyone waits for it, and removed by the
---   bracket however the wait ends: reply, timeout or cancellation.
+-- | Send a command and wait for its reply. Holds 'sendLock' for the whole
+--   exchange, so commands go one at a time. The box is registered before
+--   the bytes go out, or a fast reply could arrive before anyone waits
+--   for it, and removed however the wait ends: reply, timeout, cancel.
+--   No reply in time is 'NoReply', a fail reply is 'Refused'.
 sendOn :: Socket -> ConnectionProps -> Command a -> IO a
 sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
   -- взять номер и сдвинуть счётчик; modifyTVar' вычисляет n + 1 сразу,

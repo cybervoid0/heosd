@@ -95,7 +95,6 @@ library
                       Heos.Discovery
                       Heos.Connection
                       Heos.Connection.Heos
-                      Heos.Connection.Reconnect
                       Heos.Connection.Framing
                       Heos.Connection.Avr
                       Heos.Connection.Types

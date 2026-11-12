@@ -1,19 +1,21 @@
 module Heos.ReconnectSpec (spec) where
 
-import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async (async, concurrently_, race_, wait, withAsync)
 import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar, readTVarIO)
 import Control.Exception (ErrorCall (..), IOException, bracket, throwIO, try)
-import Control.Monad (forever, void)
-import Control.Retry (constantDelay)
+import Control.Monad (forever, void, when)
+import Control.Retry (constantDelay, exponentialBackoff)
 import Data.ByteString (ByteString)
+import GHC.Clock (getMonotonicTime)
 import Heos.Command.Heos (Command (..))
+import Heos.Connection.Avr (AvrConnectionParams (..))
 import Heos.Connection.Heos (sendCommand)
-import Heos.Connection.Reconnect (reconnecting)
 import Heos.Connection.Types (HeosConnectionParams (..))
-import Heos.Discovery (DiscoveryError (..))
-import Heos.Error (CommandError (..))
-import Heos.FakeDevice (answeringWith, failReply, playersLine)
+import Heos.Device (Device (..), LiveState (..), reconnecting)
+import Heos.Device.Parameters (DeviceParams (..))
+import Heos.Error (CommandError (..), DiscoveryError (..))
+import Heos.FakeDevice (answeringWith, failReply, fixture, messageReply, playersLine)
 import Heos.FakeDevice qualified as Fake
 import Heos.Time (Seconds (..))
 import Heos.Types (PlayerId (..))
@@ -36,6 +38,7 @@ import Network.Socket (
   socket,
   tupleToHostAddress,
  )
+import Network.Socket.ByteString (recv)
 import System.IO.Error (eofErrorType, isEOFError, mkIOError)
 import System.Timeout (timeout)
 import Test.Hspec
@@ -44,6 +47,10 @@ import Test.Hspec
 -- thing under test is what happens around 'withConnection': a refused
 -- connect, a closed socket, a fresh connection after that. A socket pair
 -- can't do any of this.
+--
+-- Since stage 23 moved into Device, every connection also runs the
+-- start-up sequence and opens the telnet line, so the fake device here
+-- answers the start-up queries and a fake amplifier accepts telnet.
 
 loopback :: HostAddress
 loopback = tupleToHostAddress (127, 0, 0, 1)
@@ -62,8 +69,19 @@ withDeviceOn wanted k = bracket (socket AF_INET Stream defaultProtocol) close $ 
   portOf (SockAddrInet port _) = port
   portOf other = error ("not an IPv4 address: " <> show other)
 
-withDevice :: (PortNumber -> Socket -> IO a) -> IO a
-withDevice = withDeviceOn defaultPort
+-- The telnet side of the amplifier: accepts every connection and holds it
+-- until the daemon hangs up. Nothing is ever asked of it here; it only
+-- has to be there, because withAvr connects on every HEOS connection.
+withAmp :: (PortNumber -> IO a) -> IO a
+withAmp k = withDeviceOn defaultPort $ \port srv ->
+  withAsync (forever (accept srv >>= forkIO . hold . fst)) $ \_ -> k port
+ where
+  hold sock = void (try @IOException (recv sock 1024)) >> close sock
+
+-- A HEOS device on a port picked by the OS, with the amplifier beside it.
+-- Hands the parameters to reach both and the listening socket.
+withDevice :: (DeviceParams -> Socket -> IO a) -> IO a
+withDevice k = withAmp $ \amp -> withDeviceOn defaultPort $ \port srv -> k (paramsFor port amp) srv
 
 -- A port nobody listens on: picked by the OS and released again, so a
 -- connect to it is refused at once. (A bound socket that does not listen
@@ -71,10 +89,18 @@ withDevice = withDeviceOn defaultPort
 freePort :: IO PortNumber
 freePort = withDeviceOn defaultPort (\port _ -> pure port)
 
--- Parameters for a device on this port. The tests check that the next
+-- Parameters for a device on these ports. The tests check that the next
 -- attempt happens, not how long it waits, hence the 10 ms policy.
-paramsFor :: PortNumber -> HeosConnectionParams
-paramsFor port =
+paramsFor :: PortNumber -> PortNumber -> DeviceParams
+paramsFor port amp = DeviceParams{heos = heosParamsFor port, avr = AvrConnectionParams{port = amp, requestTimeout = Seconds 0.2}}
+
+-- Change the HEOS side of the parameters. (A record update on `heos` is
+-- ambiguous: Device has a field of that name too.)
+withHeos :: (HeosConnectionParams -> HeosConnectionParams) -> DeviceParams -> DeviceParams
+withHeos f DeviceParams{heos, avr} = DeviceParams{heos = f heos, avr}
+
+heosParamsFor :: PortNumber -> HeosConnectionParams
+heosParamsFor port =
   HeosConnectionParams
     { commandTimeout = Seconds 1
     , heartbeatDelay = Seconds 3600
@@ -91,13 +117,8 @@ withBoth srv k =
     bracket (fst <$> accept srv) close $ \b -> k a b
 
 -- Answer every command on both sockets until the daemon hangs up.
--- get_players gets a real player: withConnection needs one to come up.
-answerBoth :: Socket -> Socket -> IO ()
-answerBoth = answerBothWith echoing
-
--- The same, with the replies chosen by the test.
-answerBothWith :: (ByteString -> ByteString) -> Socket -> Socket -> IO ()
-answerBothWith reply = answerLanes reply reply
+answerBoth :: (ByteString -> ByteString) -> Socket -> Socket -> IO ()
+answerBoth reply = answerLanes reply reply
 
 -- One reply function per lane: the events socket is the one the daemon
 -- opens first, so it is the one accepted first. A lane the daemon tears
@@ -109,20 +130,37 @@ answerLanes replyEvents replyCommands a b = answer replyEvents a `concurrently_`
  where
   answer reply sock = void (try @IOException (answeringWith reply (const (pure ())) sock))
 
--- The well-behaved device: one player, every other command echoed back.
-echoing :: ByteString -> ByteString
-echoing = Fake.scripted [("player/get_players", playersLine)]
+-- The recorded replies to the start-up queries. initialize runs on every
+-- connection before the action does, so every device here must answer
+-- them: one player (pid 1), the recorded sources and criteria, a track.
+startUp :: IO [(ByteString, ByteString)]
+startUp = do
+  sources <- fixture "get_music_sources.json"
+  criteria <- fixture "search_criteria.json"
+  nowPlaying <- fixture "now_playing.json"
+  pure
+    [ ("player/get_players", playersLine)
+    , ("browse/get_music_sources", sources)
+    , ("browse/get_search_criteria", criteria)
+    , ("player/get_now_playing_media", nowPlaying)
+    , ("player/get_volume", messageReply "player/get_volume" "pid=1&level=15")
+    , ("player/get_play_state", messageReply "player/get_play_state" "pid=1&state=play")
+    ]
 
--- The device as the tests here want it: a player for get_players, and
--- the given way with the rest. An empty reply is silence: nothing is sent.
-deviceThat :: [(ByteString, ByteString)] -> ByteString -> ByteString
-deviceThat table = Fake.scripted (("player/get_players", playersLine) : table)
+-- The device as the tests here want it: the start-up replies, the given
+-- way with the rest, anything else echoed. An empty reply is silence:
+-- nothing is sent. The table comes first, so it can override start-up.
+deviceThat :: [(ByteString, ByteString)] -> IO (ByteString -> ByteString)
+deviceThat table = Fake.scripted . (table <>) <$> startUp
 
+-- The well-behaved device.
+echoing :: IO (ByteString -> ByteString)
+echoing = deviceThat []
+
+-- Accept one connection (both sockets) and answer until the daemon hangs up.
 serve :: Socket -> IO ()
-serve = serveWith echoing
+serve srv = echoing >>= (`serveWith` srv)
 
--- Accept one connection (both sockets) and answer with `reply` until the
--- daemon hangs up.
 serveWith :: (ByteString -> ByteString) -> Socket -> IO ()
 serveWith reply = serveLanes reply reply
 
@@ -154,28 +192,38 @@ counting = do
 spec :: Spec
 spec = describe "reconnecting" $ do
   it "connects once and returns what the action returns" $
-    withDevice $ \port srv -> do
+    withDevice $ \params srv -> do
       (findAddr, asked) <- scripted [Right loopback]
       (start, runs) <- counting
       device <- async (serve srv)
-      result <- bounded $ reconnecting (paramsFor port) findAddr (\_ -> ("run " <>) . show <$> start)
+      result <- bounded $ reconnecting params findAddr (\_ -> ("run " <>) . show <$> start)
       result `shouldBe` "run 1"
       runs >>= (`shouldBe` 1)
       asked >>= (`shouldBe` 1)
       wait device
 
+  -- The action gets a device that went through start-up: the catalogue is
+  -- filled and the live state is what the device reported.
+  it "hands the action an initialized device" $
+    withDevice $ \params srv -> do
+      device <- async (serve srv)
+      volume <- bounded $ reconnecting params (pure loopback) (\dev -> (.volume) <$> readTVarIO dev.state)
+      volume `shouldBe` 15
+      wait device
+
   -- The device reboots: it closes the socket, the reader sees an empty recv,
   -- the action is cancelled, and the whole attempt starts over on a new
-  -- socket, action included.
+  -- socket, start-up and action included.
   it "reconnects and restarts the action when the device closes the connection" $
-    withDevice $ \port srv -> do
+    withDevice $ \params srv -> do
       (start, _) <- counting
       started <- newEmptyMVar
+      well <- echoing
       device <- async $ do
         -- answer until the action is under way, then pull the plug on both
-        withBoth srv $ \a b -> race_ (answerBoth a b) (takeMVar started)
+        withBoth srv $ \a b -> race_ (answerBoth well a b) (takeMVar started)
         serve srv
-      result <- bounded $ reconnecting (paramsFor port) (pure loopback) $ \_ -> do
+      result <- bounded $ reconnecting params (pure loopback) $ \_ -> do
         n <- start
         if n == 1
           then putMVar started () >> forever (threadDelay 1000000)
@@ -186,39 +234,79 @@ spec = describe "reconnecting" $ do
   -- The device is off: connect is refused at once. The daemon keeps trying
   -- and asks for the address before every attempt, so a device that comes
   -- up later (here: once it has been asked for twice) is found.
-  it "keeps trying while connect is refused, asking for the address each time" $ do
-    port <- freePort
-    asked <- newTVarIO (0 :: Int)
-    let findAddr = atomically (modifyTVar' asked (+ 1)) >> pure loopback
-    (start, runs) <- counting
-    device <- async $ do
-      atomically $ readTVar asked >>= check . (>= 2)
-      withDeviceOn port (const serve)
-    result <- bounded $ reconnecting (paramsFor port) findAddr (const start)
-    result `shouldBe` 1
-    runs >>= (`shouldBe` 1)
-    readTVarIO asked >>= (`shouldSatisfy` (>= 2))
-    wait device
+  it "keeps trying while connect is refused, asking for the address each time" $
+    withAmp $ \amp -> do
+      port <- freePort
+      asked <- newTVarIO (0 :: Int)
+      let findAddr = atomically (modifyTVar' asked (+ 1)) >> pure loopback
+      (start, runs) <- counting
+      device <- async $ do
+        atomically $ readTVar asked >>= check . (>= 2)
+        withDeviceOn port (const serve)
+      result <- bounded $ reconnecting (paramsFor port amp) findAddr (const start)
+      result `shouldBe` 1
+      runs >>= (`shouldBe` 1)
+      readTVarIO asked >>= (`shouldSatisfy` (>= 2))
+      wait device
 
   -- SSDP found nothing: a failed search is as good a reason to wait and
   -- retry as a dropped connection.
   it "keeps trying while the search finds nothing" $
-    withDevice $ \port srv -> do
+    withDevice $ \params srv -> do
       (findAddr, asked) <- scripted [Left NoResponse, Left NoResponse, Right loopback]
       (start, runs) <- counting
       device <- async (serve srv)
-      result <- bounded $ reconnecting (paramsFor port) findAddr (const start)
+      result <- bounded $ reconnecting params findAddr (const start)
       result `shouldBe` 1
       runs >>= (`shouldBe` 1)
       asked >>= (`shouldBe` 3)
       wait device
 
-  -- Only the three "device is away" exceptions are retried. A bug in the
+  -- Review item 3. The retry policy doubles from 100 ms; four refused
+  -- connects at start-up bring the next delay to 1.6 s. A link dropped
+  -- after that must not inherit it: the attempt counter belongs to one
+  -- connection, and a lost link starts over with a fresh one, so the
+  -- second connection is up well within half a second of the drop.
+  it "does not carry the start-up backoff into a reconnect" $
+    withAmp $ \amp -> do
+      port <- freePort
+      asked <- newTVarIO (0 :: Int)
+      listening <- newEmptyMVar
+      -- The fifth address is handed over only once the device listens:
+      -- otherwise the fifth connect races the bind, loses, and the test
+      -- sits out one more doubled delay.
+      let findAddr = do
+            n <- atomically (modifyTVar' asked (+ 1) >> readTVar asked)
+            when (n >= 5) (readMVar listening)
+            pure loopback
+          params = withHeos (\h -> h{retryPolicy = exponentialBackoff 100000}) (paramsFor port amp)
+      (start, _) <- counting
+      started <- newEmptyMVar
+      dropped <- newEmptyMVar
+      well <- echoing
+      device <- async $ do
+        -- four refused connects, then the device is up
+        atomically $ readTVar asked >>= check . (>= 5)
+        withDeviceOn port $ \_ srv -> do
+          putMVar listening ()
+          withBoth srv $ \a b -> race_ (answerBoth well a b) (takeMVar started)
+          getMonotonicTime >>= putMVar dropped
+          serve srv
+      reconnectedAt <- bounded $ reconnecting params findAddr $ \_ -> do
+        n <- start
+        if n == 1
+          then putMVar started () >> forever (threadDelay 1000000)
+          else getMonotonicTime
+      droppedAt <- takeMVar dropped
+      (reconnectedAt - droppedAt) `shouldSatisfy` (< 0.5)
+      wait device
+
+  -- Only the "device is away" exceptions are retried. A bug in the
   -- action is not a reason to reconnect; it surfaces.
   it "lets an exception that isn't about the device through" $
-    withDevice $ \port srv -> do
+    withDevice $ \params srv -> do
       device <- async (serve srv)
-      bounded (reconnecting (paramsFor port) (pure loopback) (\_ -> throwIO (ErrorCall "bug in the action")))
+      bounded (reconnecting params (pure loopback) (\_ -> throwIO (ErrorCall "bug in the action")))
         `shouldThrow` (\(ErrorCall msg) -> msg == "bug in the action")
       wait device
 
@@ -231,13 +319,12 @@ spec = describe "reconnecting" $ do
 
   -- Stdin ran dry, a file was missing: an IOException from the action is
   -- the action's own problem. The link is fine, and reconnecting would only
-  -- run into the same error again, forever. Today the IOException handler
-  -- takes it for a network failure.
+  -- run into the same error again, forever.
   it "lets an IOException from the action through instead of reconnecting" $
-    withDevice $ \port srv -> do
+    withDevice $ \params srv -> do
       (start, runs) <- counting
       withAsync (forever (serve srv)) $ \_ -> do
-        bounded (reconnecting (paramsFor port) (pure loopback) (\_ -> start >> ioError eof))
+        bounded (reconnecting params (pure loopback) (\_ -> start >> ioError eof))
           `shouldThrow` isEOFError
         runs >>= (`shouldBe` 1)
 
@@ -245,36 +332,38 @@ spec = describe "reconnecting" $ do
   -- heartbeat still gets through, the sockets are fine. The caller gets
   -- the timeout and decides what to do; tearing down both sockets, the
   -- telnet session and running discovery again over a slow search is not
-  -- it. Today NoReply is retried wherever it was thrown.
+  -- it. get_mute is the silent one: it is not part of start-up.
   it "lets a command timeout through instead of reconnecting" $
-    withDevice $ \port srv -> do
+    withDevice $ \params srv -> do
       (start, runs) <- counting
-      let silentVolume = deviceThat [("player/get_volume", "")]
-          params = (paramsFor port){commandTimeout = Seconds 0.1}
-      withAsync (forever (serveWith silentVolume srv)) $ \_ -> do
-        bounded (reconnecting params (pure loopback) (\conn -> start >> sendCommand conn (GetVolume (PlayerId 1))))
+      silentMute <- deviceThat [("player/get_mute", "")]
+      let params' = withHeos (\h -> h{commandTimeout = Seconds 0.1}) params
+      withAsync (forever (serveWith silentMute srv)) $ \_ -> do
+        bounded (reconnecting params' (pure loopback) (\dev -> start >> sendCommand dev.heos (GetMute (PlayerId 1))))
           `shouldThrow` (== NoReply)
         runs >>= (`shouldBe` 1)
 
   -- The device refuses a heartbeat (result=fail). Nobody asked for that
   -- beat but the connection itself, so the failure is the connection's: a
-  -- dead link, and the daemon reconnects. Today the Refused escapes the
-  -- background thread, none of the reconnect handlers knows it, and the
-  -- daemon dies.
+  -- dead link, and the daemon reconnects.
   --
   -- Only the events lane refuses, and that lane's heartbeat is the first
-  -- thread 'together' starts: so today it is its Refused that wins the
-  -- race and escapes. Were both lanes to refuse, which exception comes out
-  -- would depend on scheduling (see ConnectionSpec, "a refused heartbeat").
+  -- thread 'together' starts: so it is its Refused that wins the race and
+  -- escapes. Were both lanes to refuse, which exception comes out would
+  -- depend on scheduling (see ConnectionSpec, "a refused heartbeat"). The
+  -- beat waits 200 ms, long enough for start-up to finish first: a beat
+  -- refused during start-up is retried by the policy instead, and the
+  -- action would then be started on the second connection, not restarted.
   it "reconnects when the device refuses a heartbeat" $
-    withDevice $ \port srv -> do
+    withDevice $ \params srv -> do
       (start, _) <- counting
-      let refusingBeat = deviceThat [("system/heart_beat", failReply "system/heart_beat" "eid=12&text=System error")]
-          params = (paramsFor port){heartbeatDelay = Seconds 0.05}
+      refusingBeat <- deviceThat [("system/heart_beat", failReply "system/heart_beat" "eid=12&text=System error")]
+      well <- echoing
+      let params' = withHeos (\h -> h{heartbeatDelay = Seconds 0.2}) params
       -- the first connection refuses the beats on its events lane; the
       -- connections after it behave
-      withAsync (serveLanes refusingBeat echoing srv >> forever (serve srv)) $ \_ -> do
-        result <- bounded $ reconnecting params (pure loopback) $ \_ -> do
+      withAsync (serveLanes refusingBeat well srv >> forever (serve srv)) $ \_ -> do
+        result <- bounded $ reconnecting params' (pure loopback) $ \_ -> do
           n <- start
           if n == 1
             then forever (threadDelay 1000000)

@@ -1,5 +1,4 @@
 module Heos.Connection (
-  withReconnect,
   HeosConnection (..),
   HeosConnectionParams (..),
   AvrConnectionParams (..),
@@ -15,9 +14,6 @@ import Heos.Connection.Avr
 import Heos.Connection.Heos (
   sendCommand,
   subscribe,
- )
-import Heos.Connection.Reconnect (
-  withReconnect,
  )
 import Heos.Connection.Types (
   HeosConnection (..),

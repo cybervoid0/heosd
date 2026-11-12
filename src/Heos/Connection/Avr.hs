@@ -1,12 +1,12 @@
 module Heos.Connection.Avr where
 
 import Control.Concurrent (MVar, newMVar, withMVar)
-import Control.Exception (throwIO)
+import Control.Exception (IOException, catch, throwIO)
 import Control.Monad.Catch (bracket, bracketOnError)
 import Data.ByteString.Char8 qualified as B
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Envelope.Avr (AvrResponse (..), decodeAvrLine)
-import Heos.Error (AvrError (..))
+import Heos.Error (AvrError (..), ConnectionError (ConnectionLost))
 import Heos.Time (Seconds, toMicros)
 import Network.Socket (Family (AF_INET), HostAddress, PortNumber, SockAddr (..), SocketType (Stream), socketToHandle)
 import Network.Socket qualified as S
@@ -30,10 +30,11 @@ withAvr params addr act = bracket open hClose $ \handle -> do
   act (AvrConnection hBox params)
  where
   open = bracketOnError (S.socket AF_INET Stream S.defaultProtocol) S.close $ \s -> do
-    S.connect s (SockAddrInet params.port addr)
+    connectOrLost s
     handle <- socketToHandle s ReadWriteMode
     hSetBinaryMode handle True
     pure handle
+  connectOrLost s = S.connect s (SockAddrInet params.port addr) `catch` \(_ :: IOException) -> throwIO ConnectionLost
 
 sendAvrCommand :: AvrConnection -> AvrCommand a -> IO a
 sendAvrCommand conn cmd = withMVar conn.lock $ \h -> do
