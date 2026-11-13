@@ -2,16 +2,15 @@ module Heos.AvrSpec (spec) where
 
 import Control.Concurrent.Async (concurrently, wait, withAsync)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO, stateTVar, writeTVar)
-import Control.Exception (IOException, bracket, try)
+import Control.Exception (bracket, try)
 import Control.Monad (forM_, unless)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
-import Data.Either (isLeft)
 import Effectful (runEff)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Connection.Avr (AvrConnection, AvrConnectionParams (..), answerOf, sendAvrCommand, withAvr)
-import Heos.Error (AvrError (..))
+import Heos.Error (AvrError (..), ConnectionError (..))
 import Heos.Effect.Avr (getPower, turnOff)
 import Heos.Envelope.Avr (decodeAvrLine)
 import Heos.Handler.AvrLive (runAvrLive)
@@ -166,11 +165,12 @@ spec = do
       (result, _) <- withAmp (replying (const "")) $ \conn -> try (sendAvrCommand conn GetPower)
       result `shouldBe` Left AvrNoReply
 
-    -- A closed socket surfaces as an IO error, the kind withReconnect
-    -- restarts both connections on.
-    it "reports a hung-up device as an IO error" $ do
-      (result, _) <- withAmp hangUp $ \conn -> try @IOException (sendAvrCommand conn GetPower)
-      result `shouldSatisfy` isLeft
+    -- A closed socket is a dropped link, the kind the reconnect loop
+    -- restarts both connections on. The IO error is translated here, at
+    -- the socket, so nothing above has to know about sockets.
+    it "reports a hung-up device as a lost connection" $ do
+      (result, _) <- withAmp hangUp $ \conn -> try @ConnectionError (sendAvrCommand conn GetPower)
+      result `shouldSatisfy` either lost (const False)
 
     -- One telnet client, one command at a time: the lock keeps a second
     -- command from reading the first one's answer.
@@ -196,3 +196,6 @@ spec = do
     "PW?" -> "MV45\rSITUNER\rPWON\r"
     _ -> ""
   hangUp _ _ = pure ()
+  lost = \case
+    ConnectionLost -> True
+    _ -> False

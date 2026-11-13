@@ -1,11 +1,12 @@
-module Heos.Discovery (discover, DiscoveryError (..), filterDatagrams) where
+module Heos.Discovery (discover, DiscoveryError (..), filterDatagrams, collect) where
 
-import Control.Exception (IOException, bracket, try)
+import Control.Exception (bracket, catch, throwIO)
+import Control.Monad (forever)
 import Data.ByteString.Char8 qualified as BS
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List (partition)
 import Data.List.NonEmpty (NonEmpty (..), nonEmpty, nub)
 import Data.Maybe (mapMaybe)
-
 import Heos.Error (DiscoveryError (..))
 import Network.Socket (
   Family (AF_INET),
@@ -52,10 +53,9 @@ mSearchData =
   bsShow val = BS.pack (show val)
 
 -- | Finds HEOS devices in the local network
-discover :: IO (Either DiscoveryError (NonEmpty HostAddress))
+discover :: IO (NonEmpty HostAddress)
 discover =
-  either (Left . SocketFailure) filterDatagrams
-    <$> try @IOException (bracket open close handleSocket)
+  bracket open close handleSocket `catch` (throwIO . SocketFailure) >>= either throwIO pure . filterDatagrams
  where
   open = socket AF_INET Datagram defaultProtocol
   handleSocket sock = sendAllTo sock mSearchData multicastAddr >> collect sock
@@ -73,13 +73,11 @@ filterDatagrams datagrams = case (mbResults, nonEmpty others) of
   go _ = Nothing
 
 collect :: Socket -> IO [Datagram]
-collect sock = go []
+collect sock = do
+  acc <- newIORef []
+  _ <- timeout delay . forever . go $ acc
+  readIORef acc
  where
   delay = searchDelay * 1000000 + 100000
   bufferSize = 4096 -- bytes
-  go acc = do
-    -- timeout stops waiting if nothing arrived within 1.5 s
-    mbDatagram <- timeout delay $ recvFrom sock bufferSize
-    case mbDatagram of
-      Nothing -> pure acc
-      Just pair -> go (pair : acc)
+  go acc = recvFrom sock bufferSize >>= modifyIORef' acc . (:)

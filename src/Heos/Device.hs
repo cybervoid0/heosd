@@ -2,7 +2,7 @@ module Heos.Device where
 
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
-import Control.Exception (Exception (displayException), handle, throwIO, try)
+import Control.Exception (Exception (displayException), handle, try)
 import Control.Monad (forM, forM_, forever)
 import Control.Monad.Catch (Handler (..))
 import Control.Retry (recovering)
@@ -60,9 +60,7 @@ data LiveState = LiveState
   }
 
 withDevice :: DeviceParams -> (Device -> IO a) -> IO a
-withDevice params = reconnecting params findAddr
- where
-  findAddr = discover >>= either throwIO (pure . NE.head)
+withDevice params = reconnecting params (NE.head <$> discover)
 
 reconnecting :: DeviceParams -> IO HostAddress -> (Device -> IO a) -> IO a
 reconnecting params findAddr act = go

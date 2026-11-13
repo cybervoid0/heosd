@@ -1,10 +1,31 @@
 module Heos.DiscoverySpec (spec) where
 
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (withAsync)
+import Control.Exception (bracket)
+import Control.Monad (forever)
 import Data.ByteString.Char8 qualified as BS
 import Data.List.NonEmpty (NonEmpty (..), toList)
 import Data.Word (Word8)
+import GHC.Clock (getMonotonicTime)
 import Heos.Discovery
-import Network.Socket (HostAddress, PortNumber, SockAddr (SockAddrInet), tupleToHostAddress)
+import Network.Socket (
+  Family (AF_INET),
+  HostAddress,
+  PortNumber,
+  SockAddr (SockAddrInet),
+  Socket,
+  SocketType (Datagram),
+  bind,
+  close,
+  defaultPort,
+  defaultProtocol,
+  getSocketName,
+  socket,
+  tupleToHostAddress,
+ )
+import Network.Socket.ByteString (sendTo)
+import System.Timeout (timeout)
 import Test.Hspec
 
 -- IPv4 address with a port, the way recvFrom reports a sender.
@@ -54,7 +75,12 @@ foreignReply =
     ]
 
 spec :: Spec
-spec = describe "filterDatagrams" $ do
+spec = do
+  filterSpec
+  collectSpec
+
+filterSpec :: Spec
+filterSpec = describe "filterDatagrams" $ do
   -- Silence: nothing arrived before the timeout.
   it "reports NoResponse when nothing arrived" $
     filterDatagrams [] `shouldBe` Left NoResponse
@@ -113,3 +139,32 @@ spec = describe "filterDatagrams" $ do
   it "judges by the payload, not by the sender's address" $
     filterDatagrams [(foreignReply, addr 1900 receiver)]
       `shouldBe` Left (NoHeosDevice (addr 1900 receiver :| []))
+
+-- Review item 4. The search window is MX plus a margin, whoever is
+-- talking. With a timeout per datagram alone, a chatty SSDP neighbour (a
+-- TV announcing itself every 100 ms) keeps the search open for ever, and
+-- the daemon never gets past discovery.
+collectSpec :: Spec
+collectSpec = describe "collect" $
+  it "returns within the search window while datagrams keep coming" $
+    withUdp $ \sock port -> withUdp $ \chatter _ ->
+      withAsync (forever (sendTo chatter notify (SockAddrInet port loopback) >> threadDelay 100000)) $ \_ -> do
+        startedAt <- getMonotonicTime
+        got <- timeout 4000000 (collect sock)
+        endedAt <- getMonotonicTime
+        got `shouldSatisfy` maybe False (not . null)
+        (endedAt - startedAt) `shouldSatisfy` (< 3)
+ where
+  notify = "NOTIFY * HTTP/1.1\r\nNT: upnp:rootdevice\r\n\r\n"
+
+-- A UDP socket on a loopback port picked by the OS.
+withUdp :: (Socket -> PortNumber -> IO a) -> IO a
+withUdp k = bracket (socket AF_INET Datagram defaultProtocol) close $ \sock -> do
+  bind sock (SockAddrInet defaultPort loopback)
+  address <- getSocketName sock
+  case address of
+    SockAddrInet port _ -> k sock port
+    other -> fail ("not an IPv4 address: " <> show other)
+
+loopback :: HostAddress
+loopback = tupleToHostAddress (127, 0, 0, 1)

@@ -3,13 +3,14 @@ module Heos.ReconnectSpec (spec) where
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async (async, concurrently_, race_, wait, withAsync)
 import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar, readTVarIO)
-import Control.Exception (ErrorCall (..), IOException, bracket, throwIO, try)
+import Control.Exception (ErrorCall (..), IOException, bracket, finally, throwIO, try)
 import Control.Monad (forever, void, when)
 import Control.Retry (constantDelay, exponentialBackoff)
 import Data.ByteString (ByteString)
 import GHC.Clock (getMonotonicTime)
 import Heos.Command.Heos (Command (..))
-import Heos.Connection.Avr (AvrConnectionParams (..))
+import Heos.Command.Avr (AvrCommand (..))
+import Heos.Connection.Avr (AvrConnectionParams (..), sendAvrCommand)
 import Heos.Connection.Heos (sendCommand)
 import Heos.Connection.Types (HeosConnectionParams (..))
 import Heos.Device (Device (..), LiveState (..), reconnecting)
@@ -70,13 +71,26 @@ withDeviceOn wanted k = bracket (socket AF_INET Stream defaultProtocol) close $ 
   portOf other = error ("not an IPv4 address: " <> show other)
 
 -- The telnet side of the amplifier: accepts every connection and holds it
--- until the daemon hangs up. Nothing is ever asked of it here; it only
--- has to be there, because withAvr connects on every HEOS connection.
+-- until the daemon hangs up. Nothing is asked of it in most tests; it
+-- only has to be there, because withAvr connects on every HEOS connection.
 withAmp :: (PortNumber -> IO a) -> IO a
-withAmp k = withDeviceOn defaultPort $ \port srv ->
-  withAsync (forever (accept srv >>= forkIO . hold . fst)) $ \_ -> k port
- where
-  hold sock = void (try @IOException (recv sock 1024)) >> close sock
+withAmp = withAmpThat (const holding)
+
+-- The amplifier with a say in each telnet session: the handler gets the
+-- session's ordinal (from 1) and its socket, closed once the handler
+-- returns, however it ends.
+withAmpThat :: (Int -> Socket -> IO ()) -> (PortNumber -> IO a) -> IO a
+withAmpThat handler k = withDeviceOn defaultPort $ \port srv -> do
+  opened <- newTVarIO (0 :: Int)
+  let serveOne = do
+        (sock, _) <- accept srv
+        n <- atomically (modifyTVar' opened (+ 1) >> readTVar opened)
+        forkIO (void (try @IOException (handler n sock)) `finally` close sock)
+  withAsync (forever serveOne) $ \_ -> k port
+
+-- Hold the telnet socket until the daemon hangs up.
+holding :: Socket -> IO ()
+holding sock = void (recv sock 1024)
 
 -- A HEOS device on a port picked by the OS, with the amplifier beside it.
 -- Hands the parameters to reach both and the listening socket.
@@ -229,6 +243,36 @@ spec = describe "reconnecting" $ do
           then putMVar started () >> forever (threadDelay 1000000)
           else pure n
       result `shouldBe` 2
+      wait device
+
+  -- The telnet session lives and dies with the link: a telnet socket the
+  -- amplifier closes under a command is a dropped link, both connections
+  -- are set up again and the action is restarted. The amplifier takes the
+  -- first command and hangs up; every later session it holds.
+  it "reconnects when the amplifier closes the telnet socket" $
+    withAmpThat (\n sock -> if n == 1 then void (recv sock 1024) else holding sock) $ \amp ->
+      withDeviceOn defaultPort $ \port srv -> do
+        (start, _) <- counting
+        device <- async (serve srv >> serve srv)
+        result <- bounded $ reconnecting (paramsFor port amp) (pure loopback) $ \dev -> do
+          n <- start
+          when (n == 1) (void (sendAvrCommand dev.avr GetPower))
+          pure n
+        result `shouldBe` 2
+        wait device
+
+  -- A device that accepts the connection but leaves a start-up query
+  -- unanswered is not up yet: HEOS opens its port well before it can
+  -- answer. Nothing has been handed to the action, so this is still
+  -- connecting, and the daemon tries again. The sources query is the
+  -- silent one here; the next connection answers everything.
+  it "tries again when a start-up query goes unanswered" $
+    withDevice $ \params srv -> do
+      (start, _) <- counting
+      mute <- deviceThat [("browse/get_music_sources", "")]
+      device <- async (serveWith mute srv >> serve srv)
+      result <- bounded $ reconnecting (withHeos (\h -> h{commandTimeout = Seconds 0.2}) params) (pure loopback) (\_ -> start)
+      result `shouldBe` 1
       wait device
 
   -- The device is off: connect is refused at once. The daemon keeps trying
