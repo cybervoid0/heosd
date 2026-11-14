@@ -18,17 +18,18 @@ remote = do
       "q" -> pure ()
       line -> guarded (run line) >> go
   run = \case
-    ('s' : rest) -> searchTracks (trim rest) >>= liftIO . mapM_ printFound
+    ('s' : rest) -> searchTracks (trim rest) >>= liftIO . mapM_ (printTable . foundToRow)
     ('f' : 'p' : rest) -> do
       found <- findOne (trim rest)
-      liftIO . printFound $ found
+      liftIO . printTable . foundToRow $ found
       playItem found.target
     line -> fromMaybe (liftIO $ putStrLn help) (lookup line keys)
+  foundToRow f = (Just f.name, f.artist, f.album)
   guarded act =
     try act >>= \case
       Left (Refused eid text) -> liftIO . putStrLn $ "Device refused: " <> maybe "" T.unpack text <> " (eid " <> maybe "?" show eid <> ")"
       _ -> pure ()
-  printFound = putStrLn . T.unpack . formatFound
+  printTable = putStrLn . T.unpack . parseRow
   printRes key = liftIO . putStrLn . ((key <> ": ") <>) . show
   keys =
     [ ("off", turnOff)
@@ -45,24 +46,23 @@ remote = do
     ,
       ( "np"
       , getNowPlaying >>= \case
-          Just track -> printRes "Playing" track
+          Just track -> liftIO . printTable . trackToRow $ track
           Nothing -> liftIO . putStrLn $ "The player is idle"
       )
-    , ("ms", getSources >>= printRes "Music Sources")
-    , -- TODO: Сделать форматированный вывод как в поиске, или сделать универсальный форматер который принимает не Found а, например, 4 отдельные поля для вывода на экран
-      ("que", showQueue >>= printRes "Queue")
+    , ("que", showQueue >>= liftIO . mapM_ (printTable . trackToRow))
     ]
-  help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ ms (music sources) ‧ s <query> (search) ‧ fp <query> (find & play) ‧ que (tracks queue) ‧ q (quit)"
+  trackToRow t = (Just t.song, Just t.artist, Just t.album)
+  help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ s <query> (search) ‧ fp <query> (find & play) ‧ que (tracks queue) ‧ q (quit)"
 
-formatFound :: Found -> Text
-formatFound f = T.intercalate " ‧ " . map joinPair $ table
+parseRow :: (Maybe Text, Maybe Text, Maybe Text) -> Text
+parseRow (track, artist, album) = T.intercalate " ‧ " . map joinPair $ table
  where
-  joinPair (key, val) = key <> ": " <> val
+  joinPair (key, val) = key <> ": " <> showMaybe val
   showMaybe = fromMaybe "unknown"
   table =
-    [ ("artist", showMaybe f.artist)
-    , ("track", f.name)
-    , ("album", showMaybe f.album)
+    [ ("artist", artist)
+    , ("track", track)
+    , ("album", album)
     ]
 
 trim :: String -> Text
