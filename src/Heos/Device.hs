@@ -1,4 +1,13 @@
-module Heos.Device where
+module Heos.Device (
+  Device (..),
+  Catalogue (..),
+  LiveState (..),
+  withDevice,
+  searchable,
+  reconnecting,
+  initialize,
+  tracker,
+) where
 
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
@@ -62,22 +71,26 @@ data LiveState = LiveState
 withDevice :: DeviceParams -> (Device -> IO a) -> IO a
 withDevice params = reconnecting params (NE.head <$> discover)
 
+type ShouldRetry e = (Exception e) => e -> IO Bool
 reconnecting :: DeviceParams -> IO HostAddress -> (Device -> IO a) -> IO a
 reconnecting params findAddr act = go
  where
   go = do
     established <- newIORef False
-    res <- try @ConnectionError $ recovering params.heos.retryPolicy (handlers established) $ \_ -> findAddr >>= withConnection params.heos (deviceInit established)
-    case res of
-      Right a -> pure a
-      Left e -> putStrLn ("link dropped: " <> displayException e) >> go
+    let onRecover _ = findAddr >>= withConnection params.heos (deviceInit established)
+    res <- try @ConnectionError $ recovering params.heos.retryPolicy (handlers established) onRecover
+    either (\e -> putStrLn ("link dropped: " <> displayException e) >> go) pure res
+
   handlers ioRef =
-    [ const $ Handler $ \(e :: DiscoveryError) -> True <$ putStrLn ("reconnect: " <> displayException e)
-    , const $ Handler $ \(e :: ConnectionError) ->
-        readIORef ioRef
-          -- если соединение уже установлено, то не переподключаться по политикам, а пробросить исключение наружу, где go начнёт новый виток с чистым счётчиком
-          >>= bool (True <$ putStrLn ("reconnect: " <> displayException e)) (pure False)
-    ]
+    let logReconnect :: ShouldRetry e
+        logReconnect e = True <$ putStrLn ("reconnect: " <> displayException e)
+        checkAndLogError :: ShouldRetry e
+        checkAndLogError e = readIORef ioRef >>= bool (logReconnect e) (pure False)
+     in [ const . Handler $ logReconnect @DiscoveryError
+        , const . Handler $ checkAndLogError @ConnectionError
+        , const . Handler $ checkAndLogError @CommandError
+        ]
+
   deviceInit established conn = withAvr params.avr (getAddr conn) $ \avrConn -> do
     chan <- subscribe conn
     (catalogue, liveState) <- initialize conn

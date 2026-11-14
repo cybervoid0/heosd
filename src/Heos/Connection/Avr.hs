@@ -1,7 +1,7 @@
 module Heos.Connection.Avr where
 
 import Control.Concurrent (MVar, newMVar, withMVar)
-import Control.Exception (IOException, catch, throwIO)
+import Control.Exception (IOException, catch, handle, throwIO)
 import Control.Monad.Catch (bracket, bracketOnError)
 import Data.ByteString.Char8 qualified as B
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
@@ -25,19 +25,19 @@ data AvrConnection = AvrConnection
   }
 
 withAvr :: AvrConnectionParams -> HostAddress -> (AvrConnection -> IO a) -> IO a
-withAvr params addr act = bracket open hClose $ \handle -> do
-  hBox <- newMVar handle
+withAvr params addr act = bracket open hClose $ \h -> do
+  hBox <- newMVar h
   act (AvrConnection hBox params)
  where
   open = bracketOnError (S.socket AF_INET Stream S.defaultProtocol) S.close $ \s -> do
     connectOrLost s
-    handle <- socketToHandle s ReadWriteMode
-    hSetBinaryMode handle True
-    pure handle
+    h <- socketToHandle s ReadWriteMode
+    hSetBinaryMode h True
+    pure h
   connectOrLost s = S.connect s (SockAddrInet params.port addr) `catch` \(_ :: IOException) -> throwIO ConnectionLost
 
 sendAvrCommand :: AvrConnection -> AvrCommand a -> IO a
-sendAvrCommand conn cmd = withMVar conn.lock $ \h -> do
+sendAvrCommand conn cmd = handle (\(_ :: IOException) -> throwIO ConnectionLost) $ withMVar conn.lock $ \h -> do
   B.hPut h (renderAvrCommand cmd)
   hFlush h
   timeout (toMicros conn.params.requestTimeout) (awaitAnswer h) >>= maybe (throwIO AvrNoReply) pure
