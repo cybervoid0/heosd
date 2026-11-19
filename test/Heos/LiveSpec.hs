@@ -32,7 +32,7 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 heosParams :: HeosConnectionParams
-heosParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000}
+heosParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing}
 
 avrParams :: AvrConnectionParams
 avrParams = AvrConnectionParams{port = 23, requestTimeout = Seconds 1}
@@ -51,7 +51,7 @@ catalogueOf = do
   players <- recorded "get_players.json"
   sources <- recorded "get_music_sources.json"
   tidal <- recorded "search_criteria.json"
-  pure Catalogue{players, sources, criteria = Map.fromList [(SourceId 10, tidal), (SourceId 3, [])]}
+  pure Catalogue{players, sources, criteria = Map.fromList [(SourceId 10, tidal), (SourceId 3, [])], account = Nothing}
 
 -- The cache as the tracker left it.
 cached :: LiveState

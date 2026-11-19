@@ -8,6 +8,8 @@ module Heos.DeviceSpec (spec) where
 import Control.Concurrent.Async (race, withAsync)
 import Control.Concurrent.STM (TVar, atomically, check, modifyTVar', newTVarIO, readTVar, readTVarIO)
 import Control.Exception (bracket)
+import Data.List (elemIndex)
+import Data.Maybe (isJust)
 import Data.Void (absurd)
 import Control.Retry (constantDelay)
 import Data.ByteString (ByteString)
@@ -28,7 +30,7 @@ import System.Timeout (timeout)
 import Test.Hspec
 
 params :: HeosConnectionParams
-params = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000}
+params = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing}
 
 -- The player the connection came up with; the fixtures are recorded from it.
 thePid :: PlayerId
@@ -84,6 +86,10 @@ withFakeWith params' reply act =
 withStartUp :: (ByteString -> ByteString) -> IO ((Catalogue, LiveState), [(Lane, ByteString)])
 withStartUp reply = withFake reply (\conn _ -> initialize conn)
 
+-- Parameters with an account to sign in with.
+signedIn :: HeosConnectionParams
+signedIn = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Just Credentials{login = "listener@example.com", password = "secret"}}
+
 -- The query without its SEQUENCE number.
 dropSeq :: ByteString -> ByteString
 dropSeq q = BS.intercalate "&" [p | p <- BC.split '&' q, not ("SEQUENCE=" `BS.isPrefixOf` p)]
@@ -123,7 +129,7 @@ awaitState state p =
 -- A catalogue made by hand: sources with the three things 'searchable'
 -- looks at, and the criteria the device listed for each.
 catalogueWith :: [MusicSource] -> [(SourceId, [SearchCriterion])] -> Catalogue
-catalogueWith sources criteria = Catalogue{players = [], sources, criteria = Map.fromList criteria}
+catalogueWith sources criteria = Catalogue{players = [], sources, criteria = Map.fromList criteria, account = Nothing}
 
 source :: Text -> Int -> Bool -> Maybe Text -> MusicSource
 source name n available serviceUsername =
@@ -222,6 +228,39 @@ spec = do
             | commandPath line == "browse/get_music_sources" = messageReply "browse/get_music_sources" ""
             | otherwise = reply line
       withStartUp broken `shouldThrow` (\case Unreadable _ -> True; _ -> False)
+
+    -- Stage 33: the account comes from the parameters. The sign-in goes
+    -- before the source list, because which sources are available and
+    -- signed in depends on it, and the device echoes the account name
+    -- back, which the catalogue keeps.
+    it "signs in with the account from the parameters, before asking the sources" $ do
+      reply <- startUpReplies
+      ((catalogue, _), commands) <- withFakeWith signedIn reply (\conn _ -> initialize conn)
+      let paths = map (fmap commandPath) commands
+          at p = elemIndex (CommandsLane, p) paths
+      at "system/sign_in" `shouldSatisfy` (\i -> isJust i && i < at "browse/get_music_sources")
+      [dropSeq (commandQuery c) | (_, c) <- commands, commandPath c == "system/sign_in"]
+        `shouldBe` ["un=listener@example.com&pw=secret"]
+      catalogue.account `shouldBe` Just (Account "listener@example.com")
+
+    it "skips the sign-in without an account" $ do
+      reply <- startUpReplies
+      ((catalogue, _), commands) <- withStartUp reply
+      map (commandPath . snd) commands `shouldNotContain` ["system/sign_in"]
+      catalogue.account `shouldBe` Nothing
+
+    -- A refused sign-in is a wrong login or password, which no retry will
+    -- fix: the daemon carries on without an account, so the connection
+    -- comes up and the local sources still play. A reconnect loop here
+    -- would never reach the caller.
+    it "carries on without an account when the device refuses the sign-in" $ do
+      reply <- startUpReplies
+      let refusing line
+            | commandPath line == "system/sign_in" = failReply "system/sign_in" "eid=10&text=User not found"
+            | otherwise = reply line
+      ((catalogue, _), commands) <- withFakeWith signedIn refusing (\conn _ -> initialize conn)
+      catalogue.account `shouldBe` Nothing
+      map (commandPath . snd) commands `shouldContain` ["browse/get_music_sources"]
 
   -- Stage 30's check: "what plays" is answered from the cache, so the cache
   -- has to follow the device. The events carry volume and play state

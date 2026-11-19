@@ -8,22 +8,24 @@ import Effectful.Exception (throwIO, try)
 import Heos
 
 -- Стенд
-remote :: IO ()
-remote = do
+remote :: DeviceParams -> IO ()
+remote params = do
   putStrLn $ "HEOS remote controller\n" <> help
-  withDevice defaultParams $ \dev -> runEff . runHeosLive dev . runAvrLive dev.avr $ go
+  withDevice params $ \dev -> runEff . runHeosLive dev . runAvrLive dev.avr $ go
  where
   go =
     liftIO getLine >>= \case
       "q" -> pure ()
       line -> guarded (run line) >> go
   run = \case
-    ('s' : rest) -> searchTracks (trim rest) >>= liftIO . mapM_ (printTable . foundToRow)
-    ('f' : 'p' : rest) -> do
-      found <- findOne (trim rest)
-      liftIO . printTable . foundToRow $ found
-      playItem found.target
+    ('s' : rest) -> findMany TrackKind (trim rest) >>= liftIO . mapM_ (printTable . foundToRow)
+    ('p' : 't' : query) -> find TrackKind (trim query)
+    ('p' : 'a' : query) -> find AlbumKind (trim query)
     line -> fromMaybe (liftIO $ putStrLn help) (lookup line keys)
+  find kind query = do
+    found <- findOne kind query
+    liftIO . printTable . foundToRow $ found
+    playItem found.target
   foundToRow f = (Just f.name, f.artist, f.album)
   guarded act =
     try act >>= \case
@@ -52,7 +54,7 @@ remote = do
     , ("que", showQueue >>= liftIO . mapM_ (printTable . trackToRow))
     ]
   trackToRow t = (Just t.song, Just t.artist, Just t.album)
-  help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ s <query> (search) ‧ fp <query> (find & play) ‧ que (tracks queue) ‧ q (quit)"
+  help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ s <query> (search) ‧ pt <query> (play track) ‧ pa <query> (play album) ‧ que (tracks queue) ‧ q (quit)"
 
 parseRow :: (Maybe Text, Maybe Text, Maybe Text) -> Text
 parseRow (track, artist, album) = T.intercalate " ‧ " . map joinPair $ table
@@ -68,18 +70,19 @@ parseRow (track, artist, album) = T.intercalate " ‧ " . map joinPair $ table
 trim :: String -> Text
 trim = T.strip . T.pack
 
-findOne :: (Heos :> es) => Text -> Eff es Found
-findOne query =
-  searchTracks query >>= \case
+findOne :: (Heos :> es) => SearchKind -> Text -> Eff es Found
+findOne kind query =
+  findMany kind query >>= \case
     [] -> throwIO (Unreadable "Search result is empty")
     (track : _) -> pure track
 
-searchTracks :: (Heos :> es) => Text -> Eff es [Found]
-searchTracks query = do
-  sourceId <-
-    getSearchable kind >>= \case
-      [] -> throwIO $ Unreadable "No searchable source"
-      (found : _) -> pure found
+findMany :: (Heos :> es) => SearchKind -> Text -> Eff es [Found]
+findMany kind query = do
+  sourceId <- findSource kind
   search sourceId kind query
- where
-  kind = TrackKind
+
+findSource :: (Heos :> es) => SearchKind -> Eff es SourceId
+findSource kind =
+  getSearchable kind >>= \case
+    [] -> throwIO $ Unreadable "No searchable source"
+    (found : _) -> pure found

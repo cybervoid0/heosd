@@ -11,7 +11,7 @@ module Heos.Device (
 
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
-import Control.Exception (Exception (displayException), handle, try)
+import Control.Exception (Exception (displayException), handle, throwIO, try)
 import Control.Monad (forM, forM_, forever)
 import Control.Monad.Catch (Handler (..))
 import Control.Retry (recovering)
@@ -27,7 +27,7 @@ import Heos.Command.Heos (Command (..))
 import Heos.Connection (HeosConnection (..), getAddr, sendCommand, subscribe, withAvr)
 import Heos.Connection.Avr (AvrConnection)
 import Heos.Connection.Heos (sendOn, withConnection)
-import Heos.Connection.Types (ConnectionSockets (ConnectionSockets), HeosConnectionParams (..))
+import Heos.Connection.Types (ConnectionProps (..), ConnectionSockets (ConnectionSockets), HeosConnectionParams (..))
 import Heos.Device.Parameters (DeviceParams (..))
 import Heos.Discovery (discover)
 import Heos.Envelope.Heos (HeosEvent (HeosEvent))
@@ -50,6 +50,7 @@ data Catalogue = Catalogue
   { players :: [Player]
   , sources :: [MusicSource]
   , criteria :: Map SourceId [SearchCriterion]
+  , account :: Maybe Account
   }
 
 searchable :: SearchKind -> Catalogue -> [SourceId]
@@ -117,33 +118,36 @@ tracker chan state conn =
 -- | The start-up sequence the vendor prescribes: events off, the state
 --   queries, events on. Subscription commands go over the events socket,
 --   queries over the commands socket.
+type Query = forall a. Command a -> IO a
+
 initialize :: HeosConnection -> IO (Catalogue, LiveState)
 initialize conn = do
-  let (ConnectionSockets _ eSock cSock) = conn.sockets
-      query :: Command a -> IO a
-      query = sendOn cSock conn.props
-      subscribeCmd = sendOn eSock conn.props
   _ <- subscribeCmd (RegisterForChangeEvents Off)
-  -- TODO: поставить сюда signIn
-  -- То что в сети есть хотя бы один плеер, было проверено в `readPid` в `Heos.Connection.Heos`
+  catalogue <- catalogueOf query conn.props.params.account
+  liveState <- snapshot query conn.pid
+  _ <- subscribeCmd (RegisterForChangeEvents On)
+  pure (catalogue, liveState)
+ where
+  (ConnectionSockets _ eSock cSock) = conn.sockets
+  query :: Query
+  query = sendOn cSock conn.props
+  subscribeCmd = sendOn eSock conn.props
+
+catalogueOf :: Query -> Maybe Credentials -> IO Catalogue
+catalogueOf query creds = do
+  account <- signIn query creds
   players <- query GetPlayers
   sources <- query GetMusicSources
-  criteria <-
-    Map.fromList
-      <$> forM
-        sources
-        ( \ms -> do
-            crit <- query (GetSearchCriteria ms.sid)
-            pure (ms.sid, crit)
-        )
-  let catalogue = Catalogue{sources, players, criteria}
-      pid = conn.pid
+  criteria <- Map.fromList <$> forM sources (\ms -> (ms.sid,) <$> query (GetSearchCriteria ms.sid))
+  pure Catalogue{sources, players, criteria, account}
 
-  nowPlaying <- query (GetNowPlayingMedia pid)
-  volume <- query (GetVolume pid)
-  playState <- query (GetPlayState pid)
+snapshot :: Query -> PlayerId -> IO LiveState
+snapshot query pid = LiveState <$> query (GetNowPlayingMedia pid) <*> query (GetVolume pid) <*> query (GetPlayState pid)
 
-  let liveState = LiveState{nowPlaying, volume, playState}
-  _ <- subscribeCmd (RegisterForChangeEvents On)
-
-  pure (catalogue, liveState)
+signIn :: Query -> Maybe Credentials -> IO (Maybe Account)
+signIn _ Nothing = pure Nothing
+signIn query (Just creds) =
+  try (query (AccountSignIn creds)) >>= \case
+    Right name -> Account <$> name <$ putStrLn ("signed in as " <> maybe "?" T.unpack name)
+    Left (Refused eid msg) -> Nothing <$ putStrLn ("sign-in refused: " <> show (eid, msg) <> ", streaming is off")
+    Left other -> throwIO other

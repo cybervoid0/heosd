@@ -2,14 +2,19 @@
 --   switch that events, mute and the amplifier's power all share.
 module Heos.Types.System where
 
+import Data.Aeson (FromJSON)
 import Data.List (find)
 import Data.Text (Text)
 import Data.Text qualified as T
+import GHC.Generics (Generic)
 import Heos.ToParam (ToParam (..))
 
-data Credentials = Credentials {login :: Text, password :: Text} deriving (Eq)
+data Credentials = Credentials {login :: Text, password :: Text} deriving (Eq, Generic)
+instance FromJSON Credentials
 instance Show Credentials where
   show (Credentials login _) = "Login=" <> T.unpack login <> " Password=<hidden>"
+
+newtype Account = Account Text deriving (Show, Eq)
 
 data OnOff = On | Off deriving (Show, Eq, Ord, Enum, Bounded)
 instance ToParam OnOff where

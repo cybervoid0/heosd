@@ -121,6 +121,7 @@ heosParamsFor port =
     , maxLineLength = 64 * 1024
     , port
     , retryPolicy = constantDelay 10000
+    , account = Nothing
     }
 
 -- The daemon opens two sockets per connection. Accept both and hand them

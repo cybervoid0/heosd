@@ -20,6 +20,7 @@ defaultParams =
           , maxLineLength = 1024 * 1024
           , port = 1255
           , retryPolicy = (capDelay . toMicros) (Seconds 60) $ (exponentialBackoff . toMicros) (Seconds 1)
+          , account = Nothing
           }
     , avr =
         AvrConnectionParams

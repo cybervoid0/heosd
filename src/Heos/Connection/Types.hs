@@ -8,7 +8,7 @@ import Data.Text (Text)
 import Heos.Envelope.Heos (Envelope, HeosEvent)
 import Heos.Error (ConnectionError)
 import Heos.Time (Seconds)
-import Heos.Types (PlayerId)
+import Heos.Types (Credentials, PlayerId)
 import Network.Socket (HostAddress, PortNumber, Socket)
 
 type EitherEnvelope = Either ConnectionError Envelope
@@ -23,6 +23,7 @@ data HeosConnectionParams = HeosConnectionParams
   -- ^ how many bytes the device may send without a "\r\n" before the link
   , port :: PortNumber
   , retryPolicy :: RetryPolicyM IO
+  , account :: Maybe Credentials
   }
 
 -- | The two TCP sockets to the device, as the vendor recommends: one

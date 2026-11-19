@@ -89,7 +89,6 @@ library
                       Heos.Url
                       Heos.Envelope.Heos
                       Heos.Envelope.Avr
-                      Heos.Config
                       Heos.Device
                       Heos.Device.Parameters
                       Heos.Discovery
@@ -132,7 +131,6 @@ library
                   , stm
                   , aeson
                   , async
-                  , yaml
                   , scotty
                   , mcp-server
                   , effectful
@@ -152,6 +150,8 @@ executable heosd
 
     -- Modules included in this executable, other than Main.
     other-modules: Remote
+                   Config
+                   Settings
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -163,6 +163,11 @@ executable heosd
                     , effectful
                     , deepseq
                     , text
+                    , aeson
+                    , yaml
+                    , filepath
+                    , retry
+                    , directory
 
 
     -- Directories containing source files.
