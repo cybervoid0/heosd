@@ -168,6 +168,7 @@ executable heosd
                     , filepath
                     , retry
                     , directory
+                    , iproute
 
 
     -- Directories containing source files.

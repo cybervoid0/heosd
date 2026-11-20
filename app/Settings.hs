@@ -1,8 +1,10 @@
 module Settings (loadParams) where
 
-import Config (Config (..), DeviceConfig (..), RetryConfig (..))
+import Config (Address (..), Config (..), DeviceConfig (..), RetryConfig (..))
 import Control.Applicative ((<|>))
 import Control.Retry (capDelay, exponentialBackoff)
+import Data.Functor ((<&>))
+import Data.IP (toHostAddress)
 import Data.Yaml (decodeFileEither, prettyPrintParseException)
 import Heos (DeviceParams (..), HeosConnectionParams (..), Seconds (Seconds), defaultParams, toMicros)
 import System.Directory (XdgDirectory (XdgConfig), doesFileExist, getXdgDirectory)
@@ -31,6 +33,7 @@ fromConfig cfg =
           , heartbeatDelay = maybe dp.heos.heartbeatDelay Seconds (dev >>= (.heartbeatDelay))
           , retryPolicy = maybe dp.heos.retryPolicy getRetryPolicy (dev >>= (.retry))
           , account = cfg.account <|> dp.heos.account
+          , address = ((dev >>= (.address)) <&> toHostAddress . (.ipv4)) <|> dp.heos.address
           }
     }
  where

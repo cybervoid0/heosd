@@ -19,6 +19,7 @@ defaultParams =
           , heartbeatDelay = Seconds 30
           , maxLineLength = 1024 * 1024
           , port = 1255
+          , address = Nothing
           , retryPolicy = (capDelay . toMicros) (Seconds 60) $ (exponentialBackoff . toMicros) (Seconds 1)
           , account = Nothing
           }

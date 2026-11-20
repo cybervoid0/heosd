@@ -78,7 +78,7 @@ reconnecting params findAddr act = go
  where
   go = do
     established <- newIORef False
-    let onRecover _ = findAddr >>= withConnection params.heos (deviceInit established)
+    let onRecover _ = maybe findAddr pure params.heos.address >>= withConnection params.heos (deviceInit established)
     res <- try @ConnectionError $ recovering params.heos.retryPolicy (handlers established) onRecover
     either (\e -> putStrLn ("link dropped: " <> displayException e) >> go) pure res
 

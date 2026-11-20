@@ -142,7 +142,7 @@ exchange conn theirs cmd inspect replies = do
 -- at once, short enough to fail a test rather than hang it. Heartbeats are
 -- an hour apart so they never interfere with the command under test.
 testParams :: HeosConnectionParams
-testParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing}
+testParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing}
 
 -- Sockets here come from socketPair, so the address is never dialled;
 -- it only fills the field.

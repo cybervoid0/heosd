@@ -21,6 +21,7 @@ data HeosConnectionParams = HeosConnectionParams
   -- ^ pause between heartbeats on each socket
   , maxLineLength :: Int
   -- ^ how many bytes the device may send without a "\r\n" before the link
+  , address :: Maybe HostAddress
   , port :: PortNumber
   , retryPolicy :: RetryPolicyM IO
   , account :: Maybe Credentials

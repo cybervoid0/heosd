@@ -30,7 +30,7 @@ import System.Timeout (timeout)
 import Test.Hspec
 
 params :: HeosConnectionParams
-params = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing}
+params = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing}
 
 -- The player the connection came up with; the fixtures are recorded from it.
 thePid :: PlayerId
@@ -88,7 +88,7 @@ withStartUp reply = withFake reply (\conn _ -> initialize conn)
 
 -- Parameters with an account to sign in with.
 signedIn :: HeosConnectionParams
-signedIn = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Just Credentials{login = "listener@example.com", password = "secret"}}
+signedIn = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Just Credentials{login = "listener@example.com", password = "secret"}, address = Nothing}
 
 -- The query without its SEQUENCE number.
 dropSeq :: ByteString -> ByteString

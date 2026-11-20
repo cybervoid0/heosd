@@ -122,6 +122,7 @@ heosParamsFor port =
     , port
     , retryPolicy = constantDelay 10000
     , account = Nothing
+    , address = Nothing
     }
 
 -- The daemon opens two sockets per connection. Accept both and hand them
@@ -215,6 +216,17 @@ spec = describe "reconnecting" $ do
       result `shouldBe` "run 1"
       runs >>= (`shouldBe` 1)
       asked >>= (`shouldBe` 1)
+      wait device
+
+  -- Stage 33: an address in the configuration skips the search. The
+  -- source of addresses here fails loudly, so a search would surface as
+  -- an error nothing in reconnecting handles.
+  it "connects to the configured address without searching" $
+    withDevice $ \params srv -> do
+      device <- async (serve srv)
+      let noSearch = throwIO (ErrorCall "the search must not run")
+      result <- bounded $ reconnecting (withHeos (\h -> h{address = Just loopback}) params) noSearch (\_ -> pure True)
+      result `shouldBe` True
       wait device
 
   -- The action gets a device that went through start-up: the catalogue is

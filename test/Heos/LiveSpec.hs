@@ -32,7 +32,7 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 heosParams :: HeosConnectionParams
-heosParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing}
+heosParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing}
 
 avrParams :: AvrConnectionParams
 avrParams = AvrConnectionParams{port = 23, requestTimeout = Seconds 1}

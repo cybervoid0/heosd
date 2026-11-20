@@ -4,13 +4,23 @@ module Config (
   DeviceConfig (..),
   RetryConfig (..),
   LogLevel (..),
+  Address (..),
 ) where
 
 import Data.Aeson (withText)
+import Data.IP (IPv4)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Yaml (FromJSON (..))
 import GHC.Generics (Generic)
 import Heos.Types.System (Credentials)
+import Text.Read (readMaybe)
+
+newtype Address = Address {ipv4 :: IPv4} deriving (Show, Eq)
+
+instance FromJSON Address where
+  parseJSON = withText "Address" $ \t ->
+    maybe (fail ("not an IPv4 address: " <> show t)) (pure . Address) (readMaybe (T.unpack t))
 
 -- | What the daemon reads from its YAML file. Every section is optional:
 --   an empty file is a valid config, and the defaults live in code
@@ -38,7 +48,7 @@ instance FromJSON ServerConfig
 -- | What differs about the device from one home to the next. Protocol
 --   constants (the HEOS port, the line limit) are not here on purpose.
 data DeviceConfig = DeviceConfig
-  { address :: Maybe Text
+  { address :: Maybe Address
   -- ^ skip discovery and connect here
   , commandTimeout :: Maybe Double
   -- ^ seconds
