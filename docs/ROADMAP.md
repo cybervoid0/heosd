@@ -979,7 +979,7 @@ heos://browse/add_to_queue?pid=<pid>&sid=10&cid=LIBALBUM-<album_id>&mid=<mid>&ai
 
 ### Этап 33 · Конфиг
 
-- [ ] сделано
+- [x] сделано
 
 **Делаем:** читаем настройки из YAML-файла.
 
