@@ -9,6 +9,8 @@ data AvrCommand a where
   GetPower :: AvrCommand OnOff
   SetPower :: OnOff -> AvrCommand ()
 
+deriving stock instance Show (AvrCommand a)
+
 renderAvrCommand :: AvrCommand a -> ByteString
 renderAvrCommand = encodeUtf8 . (<> "\r") . go
  where

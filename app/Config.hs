@@ -3,7 +3,6 @@ module Config (
   ServerConfig (..),
   DeviceConfig (..),
   RetryConfig (..),
-  LogLevel (..),
   Address (..),
 ) where
 
@@ -13,6 +12,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Yaml (FromJSON (..))
 import GHC.Generics (Generic)
+import Heos.Logger (Severity)
 import Heos.Types.System (Credentials)
 import Text.Read (readMaybe)
 
@@ -30,7 +30,7 @@ data Config = Config
   , device :: Maybe DeviceConfig
   , account :: Maybe Credentials
   -- ^ the HEOS account for sign_in; without it streaming services are off
-  , logLevel :: Maybe LogLevel
+  , logLevel :: Maybe Severity
   }
   deriving (Show, Eq, Generic)
 
@@ -69,15 +69,3 @@ data RetryConfig = RetryConfig
   deriving (Show, Eq, Generic)
 
 instance FromJSON RetryConfig
-
-data LogLevel = Debug | Info | Warn | Error
-  deriving (Show, Eq, Ord, Enum, Bounded)
-
--- | Lower-case in the file: @level: info@.
-instance FromJSON LogLevel where
-  parseJSON = withText "LogLevel" $ \case
-    "debug" -> pure Debug
-    "info" -> pure Info
-    "warn" -> pure Warn
-    "error" -> pure Error
-    other -> fail ("unknown log level: " <> show other <> ", expected debug, info, warn or error")

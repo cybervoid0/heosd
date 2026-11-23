@@ -10,10 +10,13 @@ module Heos.Types (
   trueFalse,
   yesNo,
   Envelope (..),
+  Logger,
+  Severity,
 ) where
 
 import Heos.Envelope.Heos (Envelope (..))
 import Heos.Json (trueFalse, yesNo)
+import Heos.Logger (Logger, Severity)
 import Heos.Types.Browse
 import Heos.Types.Player
 import Heos.Types.System

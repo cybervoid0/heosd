@@ -9,6 +9,7 @@ module Heos.Device (
   tracker,
 ) where
 
+import Control.Arrow ((>>>))
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
 import Control.Exception (Exception (displayException), handle, throwIO, try)
@@ -17,6 +18,7 @@ import Control.Monad.Catch (Handler (..))
 import Control.Retry (recovering)
 import Data.Bool (bool)
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.List (find)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -27,14 +29,15 @@ import Heos.Command.Heos (Command (..))
 import Heos.Connection (HeosConnection (..), getAddr, sendCommand, subscribe, withAvr)
 import Heos.Connection.Avr (AvrConnection)
 import Heos.Connection.Heos (sendOn, withConnection)
-import Heos.Connection.Types (ConnectionProps (..), ConnectionSockets (ConnectionSockets), HeosConnectionParams (..))
+import Heos.Connection.Types (ConnectionProps (..), ConnectionSockets (..), HeosConnectionParams (..))
 import Heos.Device.Parameters (DeviceParams (..))
 import Heos.Discovery (discover)
 import Heos.Envelope.Heos (HeosEvent (HeosEvent))
-import Heos.Error (CommandError (..), ConnectionError, DiscoveryError)
+import Heos.Error (CommandError (..), ConnectionError (NoPlayers), DiscoveryError)
+import Heos.Logger (Logger (..), Severity (..), logAt)
 import Heos.Types
 import Heos.Url (lookupParam)
-import Network.Socket (HostAddress)
+import Network.Socket (HostAddress, SockAddr (SockAddrInet))
 import Text.Read (readMaybe)
 
 data Device = Device
@@ -47,7 +50,8 @@ data Device = Device
 -- | What the device is: read once at start-up, never changes while the
 --   connection lives.
 data Catalogue = Catalogue
-  { players :: [Player]
+  { player :: Player
+  , players :: [Player]
   , sources :: [MusicSource]
   , criteria :: Map SourceId [SearchCriterion]
   , account :: Maybe Account
@@ -70,21 +74,37 @@ data LiveState = LiveState
   }
 
 withDevice :: DeviceParams -> (Device -> IO a) -> IO a
-withDevice params = reconnecting params (NE.head <$> discover)
+withDevice params = reconnecting params findAddr
+ where
+  findAddr = do
+    hosts <- discover
+    let host = NE.head hosts
+    logHosts hosts host
+    pure host
+  logHosts hosts host = do
+    let logAt = params.heos.logger.logAt
+        numDevs = NE.length hosts
+        port = params.heos.port
+        addr = SockAddrInet port host
+    case numDevs of
+      1 -> logAt Debug $ "Found HEOS device: " <> show addr
+      n -> logAt Warn $ "Found " <> show n <> " HEOS devices, taking " <> show addr
 
 type ShouldRetry e = (Exception e) => e -> IO Bool
 reconnecting :: DeviceParams -> IO HostAddress -> (Device -> IO a) -> IO a
 reconnecting params findAddr act = go
  where
+  logAt = params.heos.logger.logAt
+  reconErrLog e = logAt Warn ("Link dropped: " <> displayException e)
   go = do
     established <- newIORef False
     let onRecover _ = maybe findAddr pure params.heos.address >>= withConnection params.heos (deviceInit established)
     res <- try @ConnectionError $ recovering params.heos.retryPolicy (handlers established) onRecover
-    either (\e -> putStrLn ("link dropped: " <> displayException e) >> go) pure res
+    either (reconErrLog >>> (>> go)) pure res
 
   handlers ioRef =
     let logReconnect :: ShouldRetry e
-        logReconnect e = True <$ putStrLn ("reconnect: " <> displayException e)
+        logReconnect e = True <$ logAt Warn ("Reconnect: " <> displayException e)
         checkAndLogError :: ShouldRetry e
         checkAndLogError e = readIORef ioRef >>= bool (logReconnect e) (pure False)
      in [ const . Handler $ logReconnect @DiscoveryError
@@ -97,8 +117,18 @@ reconnecting params findAddr act = go
     (catalogue, liveState) <- initialize conn
     state <- newTVarIO liveState
     let dev = Device{heos = conn, avr = avrConn, catalogue, state}
+    initLog dev
     writeIORef established True
     race (tracker chan state conn) (act dev) >>= either absurd pure
+   where
+    initLog dev = do
+      let port = conn.props.params.port
+          address = SockAddrInet port (getAddr conn)
+          player = dev.catalogue.player
+          playerInfo = T.unpack player.model <> ", firmware " <> T.unpack player.version
+          numSources = length dev.catalogue.sources
+          sourcesInfo = show numSources <> " source" <> (if numSources > 1 then "s" else "")
+      logAt Info $ "Connected to " <> show address <> ": " <> playerInfo <> ", " <> sourcesInfo
 
 tracker :: TChan HeosEvent -> TVar LiveState -> HeosConnection -> IO Void
 tracker chan state conn =
@@ -112,42 +142,40 @@ tracker chan state conn =
         atomically $ modifyTVar' state $ \s -> s{nowPlaying}
       _ -> pure ()
  where
+  logAt = conn.props.params.logger.logAt
   skipBadReply :: CommandError -> IO ()
-  skipBadReply e = putStrLn ("now playing: " <> displayException e)
-
--- | The start-up sequence the vendor prescribes: events off, the state
---   queries, events on. Subscription commands go over the events socket,
---   queries over the commands socket.
-type Query = forall a. Command a -> IO a
+  skipBadReply e = logAt Warn ("Now playing: " <> displayException e)
 
 initialize :: HeosConnection -> IO (Catalogue, LiveState)
 initialize conn = do
   _ <- subscribeCmd (RegisterForChangeEvents Off)
-  catalogue <- catalogueOf query conn.props.params.account
-  liveState <- snapshot query conn.pid
+  catalogue <- catalogueOf conn
+  liveState <- snapshot conn
   _ <- subscribeCmd (RegisterForChangeEvents On)
   pure (catalogue, liveState)
  where
-  (ConnectionSockets _ eSock cSock) = conn.sockets
-  query :: Query
-  query = sendOn cSock conn.props
-  subscribeCmd = sendOn eSock conn.props
+  subscribeCmd = sendOn conn.sockets.events conn.props
 
-catalogueOf :: Query -> Maybe Credentials -> IO Catalogue
-catalogueOf query creds = do
-  account <- signIn query creds
-  players <- query GetPlayers
-  sources <- query GetMusicSources
-  criteria <- Map.fromList <$> forM sources (\ms -> (ms.sid,) <$> query (GetSearchCriteria ms.sid))
-  pure Catalogue{sources, players, criteria, account}
+catalogueOf :: HeosConnection -> IO Catalogue
+catalogueOf conn = do
+  account <- signIn conn
+  players <- sendCommand conn GetPlayers
+  player <- maybe (throwIO NoPlayers) pure $ find ((== conn.pid) . (.pid)) players
+  sources <- sendCommand conn GetMusicSources
+  criteria <- Map.fromList <$> forM sources (\ms -> (ms.sid,) <$> sendCommand conn (GetSearchCriteria ms.sid))
+  pure Catalogue{sources, players, criteria, account, player}
 
-snapshot :: Query -> PlayerId -> IO LiveState
-snapshot query pid = LiveState <$> query (GetNowPlayingMedia pid) <*> query (GetVolume pid) <*> query (GetPlayState pid)
+snapshot :: HeosConnection -> IO LiveState
+snapshot conn = LiveState <$> sendCommand conn (GetNowPlayingMedia conn.pid) <*> sendCommand conn (GetVolume conn.pid) <*> sendCommand conn (GetPlayState conn.pid)
 
-signIn :: Query -> Maybe Credentials -> IO (Maybe Account)
-signIn _ Nothing = pure Nothing
-signIn query (Just creds) =
-  try (query (AccountSignIn creds)) >>= \case
-    Right name -> Account <$> name <$ putStrLn ("signed in as " <> maybe "?" T.unpack name)
-    Left (Refused eid msg) -> Nothing <$ putStrLn ("sign-in refused: " <> show (eid, msg) <> ", streaming is off")
-    Left other -> throwIO other
+signIn :: HeosConnection -> IO (Maybe Account)
+signIn conn = case account of
+  Nothing -> pure Nothing
+  Just creds ->
+    try (sendCommand conn (AccountSignIn creds)) >>= \case
+      Right name -> Account <$> name <$ logAt Info ("Signed in as " <> maybe "?" T.unpack name)
+      Left (Refused eid msg) -> Nothing <$ logAt Warn ("Sign-in refused: " <> show (eid, msg) <> ", streaming is off")
+      Left other -> throwIO other
+ where
+  logAt = conn.props.params.logger.logAt
+  account = conn.props.params.account

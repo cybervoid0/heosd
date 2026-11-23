@@ -117,6 +117,7 @@ library
                       Heos.Types.System
                       Heos.Types.Player
                       Heos.Types.Browse
+                      Heos.Logger
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -138,6 +139,7 @@ library
                   , containers
                   , exceptions
                   , deepseq
+                  , time
                   
         
     -- Directories containing source files.
@@ -205,6 +207,7 @@ test-suite heosd-test
                       Heos.FakeSpec
                       Heos.AvrSpec
                       Heos.AvrFakeSpec
+                      Heos.LoggerSpec
                       Heos.FakeDevice
 
     build-tool-depends: hspec-discover:hspec-discover

@@ -10,6 +10,7 @@ module Heos.FakeDevice (
   messageReply,
   failReply,
   playersLine,
+  playerInfoLine,
   fixture,
   commandPath,
   commandQuery,
@@ -66,11 +67,21 @@ failReply :: ByteString -> ByteString -> ByteString
 failReply path msg =
   "{\"heos\": {\"command\": \"" <> path <> "\", \"result\": \"fail\", \"message\": \"" <> msg <> "\"}}\r\n"
 
+-- | The one player of the fake device, pid 1, as the device spells it.
+playerJson :: ByteString
+playerJson =
+  "{\"name\": \"Marantz MODEL 60n\", \"pid\": 1, \"model\": \"Marantz MODEL 60n\", \"version\": \"3.139.173\", \"ip\": \"192.168.1.241\", \"network\": \"wifi\", \"lineout\": 0, \"serial\": \"MCQJ072400069\"}"
+
 -- | A get_players reply with one player, pid 1: what 'withConnection' needs
 --   to find its player. Fits any test that sends its commands to pid 1.
 playersLine :: ByteString
 playersLine =
-  "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"success\", \"message\": \"\"}, \"payload\": [{\"name\": \"Marantz MODEL 60n\", \"pid\": 1, \"model\": \"Marantz MODEL 60n\", \"version\": \"3.139.173\", \"ip\": \"192.168.1.241\", \"network\": \"wifi\", \"lineout\": 0, \"serial\": \"MCQJ072400069\"}]}\r\n"
+  "{\"heos\": {\"command\": \"player/get_players\", \"result\": \"success\", \"message\": \"\"}, \"payload\": [" <> playerJson <> "]}\r\n"
+
+-- | A get_player_info reply about that same player.
+playerInfoLine :: ByteString
+playerInfoLine =
+  "{\"heos\": {\"command\": \"player/get_player_info\", \"result\": \"success\", \"message\": \"pid=1\"}, \"payload\": " <> playerJson <> "}\r\n"
 
 -- | A recorded reply as one wire line. The files are pretty-printed; only
 --   "\r\n" ends a line on the wire, so stray "\r" must go.

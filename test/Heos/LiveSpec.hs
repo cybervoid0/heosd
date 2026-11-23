@@ -32,10 +32,10 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 heosParams :: HeosConnectionParams
-heosParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing}
+heosParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing, logger = mempty}
 
 avrParams :: AvrConnectionParams
-avrParams = AvrConnectionParams{port = 23, requestTimeout = Seconds 1}
+avrParams = AvrConnectionParams{port = 23, requestTimeout = Seconds 1, logger = mempty}
 
 -- The payload of a recorded reply, decoded.
 recorded :: (FromJSON a) => FilePath -> IO a
@@ -48,10 +48,11 @@ recorded file =
 -- sources, Tidal's criteria for Tidal (sid 10), none for TuneIn (sid 3).
 catalogueOf :: IO Catalogue
 catalogueOf = do
+  player <- recorded "get_player_info.json"
   players <- recorded "get_players.json"
   sources <- recorded "get_music_sources.json"
   tidal <- recorded "search_criteria.json"
-  pure Catalogue{players, sources, criteria = Map.fromList [(SourceId 10, tidal), (SourceId 3, [])], account = Nothing}
+  pure Catalogue{player, players, sources, criteria = Map.fromList [(SourceId 10, tidal), (SourceId 3, [])], account = Nothing}
 
 -- The cache as the tracker left it.
 cached :: LiveState

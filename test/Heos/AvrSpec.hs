@@ -7,6 +7,7 @@ import Control.Monad (forM_, unless)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
+import Data.List (isInfixOf)
 import Effectful (runEff)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Connection.Avr (AvrConnection, AvrConnectionParams (..), answerOf, sendAvrCommand, withAvr)
@@ -14,6 +15,7 @@ import Heos.Error (AvrError (..), ConnectionError (..))
 import Heos.Effect.Avr (getPower, turnOff)
 import Heos.Envelope.Avr (decodeAvrLine)
 import Heos.Handler.AvrLive (runAvrLive)
+import Heos.Logger (Logger, Severity (..), capturing)
 import Heos.Time (Seconds (..))
 import Heos.Types (OnOff (..))
 import Network.Socket (
@@ -50,7 +52,7 @@ loopback = tupleToHostAddress (127, 0, 0, 1)
 -- Short enough to fail a test rather than hang it; the device answers at
 -- once when it answers at all.
 paramsFor :: PortNumber -> AvrConnectionParams
-paramsFor port = AvrConnectionParams{port, requestTimeout = Seconds 0.2}
+paramsFor port = AvrConnectionParams{port, requestTimeout = Seconds 0.2, logger = mempty}
 
 -- What the amplifier does with its end of the socket once the daemon has
 -- connected. Gets the log to record what the daemon sent.
@@ -102,20 +104,38 @@ statefulAmp initial = do
 -- script on the accepted socket and the action over 'withAvr' to it.
 -- Returns the action's result and the lines the amplifier received.
 withAmp :: Script -> (AvrConnection -> IO a) -> IO (a, [ByteString])
-withAmp script act = bracket (socket AF_INET Stream defaultProtocol) close $ \srv -> do
+withAmp = withAmpLoggingTo mempty
+
+-- 'withAmp' with the connection writing its log to this logger.
+withAmpLoggingTo :: Logger -> Script -> (AvrConnection -> IO a) -> IO (a, [ByteString])
+withAmpLoggingTo spy script act = bracket (socket AF_INET Stream defaultProtocol) close $ \srv -> do
   setSocketOption srv ReuseAddr 1
   bind srv (SockAddrInet defaultPort loopback)
   listen srv 1
   port <- portOf <$> getSocketName srv
   seen <- newTVarIO []
   withAsync (bracket (fst <$> accept srv) close (script seen)) $ \amp -> do
-    result <- withAvr (paramsFor port) loopback act
+    result <- withAvr (paramsFor port){logger = spy} loopback act
     wait amp
     sent <- reverse <$> readTVarIO seen
     pure (result, sent)
  where
   portOf (SockAddrInet port _) = port
   portOf other = error ("not an IPv4 address: " <> show other)
+
+-- A port nobody listens on: picked by the OS and released again, so a
+-- connect to it is refused at once.
+freePort :: IO PortNumber
+freePort = bracket (socket AF_INET Stream defaultProtocol) close $ \srv -> do
+  bind srv (SockAddrInet defaultPort loopback)
+  getSocketName srv >>= \case
+    SockAddrInet port _ -> pure port
+    other -> fail ("not an IPv4 address: " <> show other)
+
+-- What was logged at Warn or above. The tests do not tell a warning from
+-- an error; that line is the library's to draw.
+complaints :: [(Severity, String)] -> [String]
+complaints entries = [msg | (sev, msg) <- entries, sev >= Warn]
 
 spec :: Spec
 spec = do
@@ -183,6 +203,50 @@ spec = do
         sendAvrCommand conn GetPower `concurrently` sendAvrCommand conn GetPower
       [a, b] `shouldMatchList` [On, Off]
       sent `shouldBe` ["PW?", "PW?"]
+
+  -- Stage 34. The telnet side writes to the same log as the HEOS side;
+  -- its lines must say they are about telnet, or a refused telnet port
+  -- reads as "the HEOS device closed the connection".
+  describe "what the telnet connection reports" $ do
+    it "notes a served command below Warn, by name" $ do
+      (spy, seen) <- capturing
+      _ <- withAmpLoggingTo spy (replying (poweredAmp On)) $ \conn -> sendAvrCommand conn GetPower
+      entries <- seen
+      complaints entries `shouldBe` []
+      map snd entries `shouldSatisfy` any (\msg -> "AVR" `isInfixOf` msg && "GetPower" `isInfixOf` msg)
+
+    it "complains about a command the device left unanswered" $ do
+      (spy, seen) <- capturing
+      _ <- withAmpLoggingTo spy (replying (const "")) $ \conn -> try @AvrError (sendAvrCommand conn (SetPower Off))
+      said <- complaints <$> seen
+      said `shouldSatisfy` any (\msg -> "AVR" `isInfixOf` msg && "SetPower" `isInfixOf` msg)
+
+    it "complains about a command cut short by the device hanging up" $ do
+      (spy, seen) <- capturing
+      _ <- withAmpLoggingTo spy hangUp $ \conn -> try @ConnectionError (sendAvrCommand conn GetPower)
+      complaints <$> seen >>= (`shouldSatisfy` any ("GetPower" `isInfixOf`))
+
+    it "does not note a failed command as served" $ do
+      (spy, seen) <- capturing
+      _ <- withAmpLoggingTo spy (replying (const "")) $ \conn -> try @AvrError (sendAvrCommand conn GetPower)
+      entries <- seen
+      [msg | (sev, msg) <- entries, sev < Warn] `shouldBe` []
+
+    -- The telnet port can be closed while HEOS works: network control
+    -- switched off in the amplifier's settings. The complaint names the
+    -- address that refused, and the error stays the one reconnecting acts on.
+    it "complains, with the address, when the telnet port is closed" $ do
+      (spy, seen) <- capturing
+      port <- freePort
+      outcome <- try @ConnectionError $ withAvr (paramsFor port){logger = spy} loopback (\_ -> pure ())
+      outcome `shouldSatisfy` either lost (const False)
+      said <- complaints <$> seen
+      said `shouldSatisfy` any (\msg -> "127.0.0.1" `isInfixOf` msg && show port `isInfixOf` msg)
+
+    it "has nothing to say about a connection that opens and closes without a command" $ do
+      (spy, seen) <- capturing
+      _ <- withAmpLoggingTo spy hangUp $ \_ -> pure ()
+      seen `shouldReturn` []
 
   describe "runAvrLive" $
     it "runs getPower and setPower over the connection" $ do

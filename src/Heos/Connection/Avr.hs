@@ -1,13 +1,14 @@
 module Heos.Connection.Avr where
 
 import Control.Concurrent (MVar, newMVar, withMVar)
-import Control.Exception (IOException, catch, handle, throwIO)
+import Control.Exception (Exception (displayException), IOException, catch, handle, throwIO)
 import Control.Monad.Catch (bracket, bracketOnError)
 import Data.ByteString.Char8 qualified as B
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Envelope.Avr (AvrResponse (..), decodeAvrLine)
 import Heos.Error (AvrError (..), ConnectionError (ConnectionLost))
 import Heos.Time (Seconds, toMicros)
+import Heos.Logger (Logger (..), Severity (Warn), logged)
 import Network.Socket (Family (AF_INET), HostAddress, PortNumber, SockAddr (..), SocketType (Stream), socketToHandle)
 import Network.Socket qualified as S
 import System.IO (Handle, IOMode (ReadWriteMode), hClose, hFlush, hGetChar, hSetBinaryMode)
@@ -17,6 +18,7 @@ import System.Timeout (timeout)
 data AvrConnectionParams = AvrConnectionParams
   { port :: PortNumber
   , requestTimeout :: Seconds
+  , logger :: Logger
   }
 
 data AvrConnection = AvrConnection
@@ -34,13 +36,17 @@ withAvr params addr act = bracket open hClose $ \h -> do
     h <- socketToHandle s ReadWriteMode
     hSetBinaryMode h True
     pure h
-  connectOrLost s = S.connect s (SockAddrInet params.port addr) `catch` \(_ :: IOException) -> throwIO ConnectionLost
+  sockAddr = SockAddrInet params.port addr
+  connectOrLost s = S.connect s sockAddr `catch` \(e :: IOException) -> do
+    params.logger.logAt Warn $ "AVR: cannot connect to " <> show sockAddr <> ": " <> displayException e
+    throwIO ConnectionLost
 
 sendAvrCommand :: AvrConnection -> AvrCommand a -> IO a
-sendAvrCommand conn cmd = handle (\(_ :: IOException) -> throwIO ConnectionLost) $ withMVar conn.lock $ \h -> do
-  B.hPut h (renderAvrCommand cmd)
-  hFlush h
-  timeout (toMicros conn.params.requestTimeout) (awaitAnswer h) >>= maybe (throwIO AvrNoReply) pure
+sendAvrCommand conn cmd = handle (\(_ :: IOException) -> throwIO ConnectionLost) $ withMVar conn.lock $ \h ->
+  logged conn.params.logger ("AVR " <> show cmd) $ do
+    B.hPut h (renderAvrCommand cmd)
+    hFlush h
+    timeout (toMicros conn.params.requestTimeout) (awaitAnswer h) >>= maybe (throwIO AvrNoReply) pure
  where
   -- события вроде MV45 пропускаем, ждём строку, которая отвечает на нашу команду
   awaitAnswer h = do

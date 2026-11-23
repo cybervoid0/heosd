@@ -993,7 +993,7 @@ heos://browse/add_to_queue?pid=<pid>&sid=10&cid=LIBALBUM-<album_id>&mid=<mid>&ai
 
 ### Этап 34 · Логи
 
-- [ ] сделано
+- [x] сделано
 
 **Делаем:** вывод в stderr с уровнями и контекстом.
 

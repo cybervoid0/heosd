@@ -7,16 +7,19 @@ import Control.Exception (ErrorCall (..), IOException, bracket, finally, throwIO
 import Control.Monad (forever, void, when)
 import Control.Retry (constantDelay, exponentialBackoff)
 import Data.ByteString (ByteString)
+import Data.List (isInfixOf)
 import GHC.Clock (getMonotonicTime)
 import Heos.Command.Heos (Command (..))
 import Heos.Command.Avr (AvrCommand (..))
 import Heos.Connection.Avr (AvrConnectionParams (..), sendAvrCommand)
 import Heos.Connection.Heos (sendCommand)
 import Heos.Connection.Types (HeosConnectionParams (..))
+import Heos.Connection.Types qualified as HeosParams
 import Heos.Device (Device (..), LiveState (..), reconnecting)
 import Heos.Device.Parameters (DeviceParams (..))
 import Heos.Error (CommandError (..), DiscoveryError (..))
-import Heos.FakeDevice (answeringWith, failReply, fixture, messageReply, playersLine)
+import Heos.Logger (Logger, Severity (..), capturing)
+import Heos.FakeDevice (answeringWith, failReply, fixture, messageReply, playerInfoLine, playersLine)
 import Heos.FakeDevice qualified as Fake
 import Heos.Time (Seconds (..))
 import Heos.Types (PlayerId (..))
@@ -106,7 +109,7 @@ freePort = withDeviceOn defaultPort (\port _ -> pure port)
 -- Parameters for a device on these ports. The tests check that the next
 -- attempt happens, not how long it waits, hence the 10 ms policy.
 paramsFor :: PortNumber -> PortNumber -> DeviceParams
-paramsFor port amp = DeviceParams{heos = heosParamsFor port, avr = AvrConnectionParams{port = amp, requestTimeout = Seconds 0.2}}
+paramsFor port amp = DeviceParams{heos = heosParamsFor port, avr = AvrConnectionParams{port = amp, requestTimeout = Seconds 0.2, logger = mempty}}
 
 -- Change the HEOS side of the parameters. (A record update on `heos` is
 -- ambiguous: Device has a field of that name too.)
@@ -123,6 +126,7 @@ heosParamsFor port =
     , retryPolicy = constantDelay 10000
     , account = Nothing
     , address = Nothing
+    , logger = mempty
     }
 
 -- The daemon opens two sockets per connection. Accept both and hand them
@@ -156,6 +160,7 @@ startUp = do
   nowPlaying <- fixture "now_playing.json"
   pure
     [ ("player/get_players", playersLine)
+    , ("player/get_player_info", playerInfoLine)
     , ("browse/get_music_sources", sources)
     , ("browse/get_search_criteria", criteria)
     , ("player/get_now_playing_media", nowPlaying)
@@ -204,6 +209,21 @@ counting :: IO (IO Int, IO Int)
 counting = do
   runs <- newTVarIO (0 :: Int)
   pure (atomically $ modifyTVar' runs (+ 1) >> readTVar runs, readTVarIO runs)
+
+-- The parameters with the HEOS side logging to this logger. (The field
+-- is named with its module: the telnet parameters have a `logger` too.)
+loggingTo :: Logger -> DeviceParams -> DeviceParams
+loggingTo spy = withHeos (\h -> h{HeosParams.logger = spy})
+
+-- What was logged at Warn or above. The tests do not tell a warning from
+-- an error; that line is the library's to draw.
+complaints :: [(Severity, String)] -> [String]
+complaints entries = [msg | (sev, msg) <- entries, sev >= Warn]
+
+-- What was logged at Info or above: everything but the per-command debug
+-- lines, which every connection writes plenty of.
+reports :: [(Severity, String)] -> [String]
+reports entries = [msg | (sev, msg) <- entries, sev >= Info]
 
 spec :: Spec
 spec = describe "reconnecting" $ do
@@ -357,6 +377,96 @@ spec = describe "reconnecting" $ do
       droppedAt <- takeMVar dropped
       (reconnectedAt - droppedAt) `shouldSatisfy` (< 0.5)
       wait device
+
+  -- Stage 34: what the reconnect loop tells the log. A daemon that waits
+  -- for its device looks exactly like one that hangs, unless every failed
+  -- attempt and every dropped link leaves a line behind.
+  it "has nothing to complain about when the first connection succeeds" $
+    withDevice $ \params srv -> do
+      (spy, seen) <- capturing
+      device <- async (serve srv)
+      _ <- bounded $ reconnecting (loggingTo spy params) (pure loopback) (\_ -> pure ())
+      wait device
+      complaints <$> seen `shouldReturn` []
+
+  -- The one line a person looks for after a start: where the daemon
+  -- connected and to what. Not a debug line: it must be there at the
+  -- default level.
+  it "reports where it connected and to which player" $
+    withDevice $ \params srv -> do
+      (spy, seen) <- capturing
+      device <- async (serve srv)
+      _ <- bounded $ reconnecting (loggingTo spy params) (pure loopback) (\_ -> pure ())
+      wait device
+      said <- reports <$> seen
+      said `shouldSatisfy` any (\msg -> "127.0.0.1" `isInfixOf` msg && "Marantz MODEL 60n" `isInfixOf` msg)
+
+  -- Every connection is reported, not only the first: after a drop the
+  -- log must show that the link is back.
+  it "reports the connection again after a reconnect" $
+    withDevice $ \params srv -> do
+      (spy, seen) <- capturing
+      (start, _) <- counting
+      started <- newEmptyMVar
+      well <- echoing
+      device <- async $ do
+        withBoth srv $ \a b -> race_ (answerBoth well a b) (takeMVar started)
+        serve srv
+      _ <- bounded $ reconnecting (loggingTo spy params) (pure loopback) $ \_ -> do
+        n <- start
+        when (n == 1) (putMVar started () >> threadDelay 5000000)
+      wait device
+      said <- reports <$> seen
+      length (filter ("127.0.0.1" `isInfixOf`) said) `shouldBe` 2
+
+  it "complains once when the link drops" $
+    withDevice $ \params srv -> do
+      (spy, seen) <- capturing
+      (start, _) <- counting
+      started <- newEmptyMVar
+      well <- echoing
+      device <- async $ do
+        withBoth srv $ \a b -> race_ (answerBoth well a b) (takeMVar started)
+        serve srv
+      result <- bounded $ reconnecting (loggingTo spy params) (pure loopback) $ \_ -> do
+        n <- start
+        if n == 1
+          then putMVar started () >> forever (threadDelay 1000000)
+          else pure n
+      result `shouldBe` 2
+      wait device
+      length . complaints <$> seen `shouldReturn` 1
+
+  it "reports the attempts that found the port closed" $
+    withAmp $ \amp -> do
+      (spy, seen) <- capturing
+      port <- freePort
+      asked <- newTVarIO (0 :: Int)
+      let findAddr = atomically (modifyTVar' asked (+ 1)) >> pure loopback
+      device <- async $ do
+        atomically $ readTVar asked >>= check . (>= 3)
+        withDeviceOn port (const serve)
+      _ <- bounded $ reconnecting (loggingTo spy (paramsFor port amp)) findAddr (\_ -> pure ())
+      wait device
+      length . reports <$> seen >>= (`shouldSatisfy` (>= 2))
+
+  it "reports every search that found nothing" $
+    withDevice $ \params srv -> do
+      (spy, seen) <- capturing
+      (findAddr, _) <- scripted [Left NoResponse, Left NoResponse, Right loopback]
+      device <- async (serve srv)
+      _ <- bounded $ reconnecting (loggingTo spy params) findAddr (\_ -> pure ())
+      wait device
+      length . reports <$> seen >>= (`shouldSatisfy` (>= 2))
+
+  it "reports a start-up query the device left unanswered" $
+    withDevice $ \params srv -> do
+      (spy, seen) <- capturing
+      mute <- deviceThat [("browse/get_music_sources", "")]
+      device <- async (serveWith mute srv >> serve srv)
+      _ <- bounded $ reconnecting (withHeos (\h -> h{commandTimeout = Seconds 0.2}) (loggingTo spy params)) (pure loopback) (\_ -> pure ())
+      wait device
+      length . reports <$> seen >>= (`shouldSatisfy` (>= 1))
 
   -- Only the "device is away" exceptions are retried. A bug in the
   -- action is not a reason to reconnect; it surfaces.

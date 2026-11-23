@@ -9,6 +9,7 @@ import Control.Retry (constantDelay)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
+import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isNothing)
 import Data.Text.Encoding qualified as T
@@ -18,6 +19,7 @@ import Heos.Connection.Heos (findBox, readPid, runConnection, sendCommand, subsc
 import Heos.Connection.Types (ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..), Waiting (..))
 import Heos.Envelope.Heos (HeosEvent (..))
 import Heos.Error (CommandError (..), ConnectionError (..))
+import Heos.Logger (Severity (..), capturing)
 import Heos.FakeDevice (answering, answeringWith, commandPath, failReply, fixture, messageReply, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Types
@@ -142,7 +144,7 @@ exchange conn theirs cmd inspect replies = do
 -- at once, short enough to fail a test rather than hang it. Heartbeats are
 -- an hour apart so they never interfere with the command under test.
 testParams :: HeosConnectionParams
-testParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing}
+testParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing, logger = mempty}
 
 -- Sockets here come from socketPair, so the address is never dialled;
 -- it only fills the field.
@@ -195,6 +197,11 @@ run = runWith testParams
 inFlight :: HeosConnection -> IO Int
 inFlight conn = Map.size <$> readTVarIO conn.props.waiting
 
+-- What was logged at Warn or above. The tests do not tell a warning from
+-- an error; that line is the library's to draw.
+complaints :: [(Severity, String)] -> [String]
+complaints entries = [msg | (sev, msg) <- entries, sev >= Warn]
+
 spec :: Spec
 spec = do
   describe "runConnection" $ do
@@ -212,8 +219,8 @@ spec = do
           nextEvent ch `shouldReturn` volumeEvent "21"
 
     -- Responses and "command under process" are not events: subscribers
-    -- must never see them. (The reader currently prints the response to
-    -- stdout; that line in the test output is expected.)
+    -- must never see them. (Nobody waits for this response, so the reader
+    -- reports it as a stray reply; see "what the reader reports".)
     it "passes only events to subscribers, not responses or pending notices" $
       withSocketPair $ \(ours, theirs) ->
         run ours $ \conn -> do
@@ -432,6 +439,128 @@ spec = do
   -- race inside runConnection, the way heartbeat and MCP handlers will:
   -- nobody cancels them, so the only way they learn the link is gone is
   -- the Left the reader puts into their boxes on its way out.
+  -- Stage 34: the reader drops what it cannot deliver or cannot read, and
+  -- carries on. Dropping in silence would hide a device that misbehaves,
+  -- so each dropped line shows up in the log, once, with enough of it to
+  -- tell what it was. The messages are matched by what they must carry,
+  -- not by their wording.
+  describe "what the reader reports" $ do
+    it "complains about a reply nobody is waiting for, naming the command" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          sendAll theirs getPlayersLine
+          threadDelay 100000
+          _ <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 0]
+          said <- complaints <$> seen
+          length said `shouldBe` 1
+          said `shouldSatisfy` any ("player/get_players" `isInfixOf`)
+
+    it "complains about a late reply to a command it gave up on" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          let late = "{\"heos\": {\"command\": \"player/get_volume\", \"result\": \"success\", \"message\": \"pid=1&level=99&SEQUENCE=99\"}}\r\n"
+          _ <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [late, volumeReply 0]
+          said <- complaints <$> seen
+          length said `shouldBe` 1
+          said `shouldSatisfy` any ("player/get_volume" `isInfixOf`)
+
+    -- A line that is not JSON at all: nothing to route. The reader quotes
+    -- it in the log and goes on reading; the next command is served.
+    it "complains about a line it cannot read, quoting it, and carries on" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          sendAll theirs "this is not json\r\n"
+          answer <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 0]
+          answer `shouldBe` 10
+          said <- complaints <$> seen
+          length said `shouldBe` 1
+          said `shouldSatisfy` any ("this is not json" `isInfixOf`)
+
+    it "complains about every line it drops, not only the first" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          sendAll theirs "first\r\n"
+          sendAll theirs getPlayersLine
+          sendAll theirs "third\r\n"
+          threadDelay 100000
+          _ <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 0]
+          length . complaints <$> seen `shouldReturn` 3
+
+    it "has nothing to complain about in an ordinary exchange" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          ch <- subscribe conn
+          sendAll theirs (eventLine "player_volume_changed" "pid=1&level=20")
+          nextEvent ch `shouldReturn` volumeEvent "20"
+          _ <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 0]
+          _ <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 1]
+          complaints <$> seen `shouldReturn` []
+
+    -- "command under process" is the device saying the real reply will
+    -- follow: part of the protocol, not something to report.
+    it "does not complain about a 'command under process' notice" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          sendAll theirs pendingLine
+          _ <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 0]
+          complaints <$> seen `shouldReturn` []
+
+  -- Stage 34: every command leaves a trace, so the log can answer "what
+  -- did the daemon do, and how did it end". A command that went well is
+  -- routine and stays below Warn; one that failed is a complaint carrying
+  -- the reason. The exception still reaches the caller as before.
+  describe "what a command reports" $ do
+    it "notes every command it served, below Warn" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          _ <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 0]
+          _ <- exchange conn theirs (GetVolume (PlayerId 1)) (const (pure ())) [volumeReply 1]
+          entries <- seen
+          length entries `shouldSatisfy` (>= 2)
+          complaints entries `shouldBe` []
+
+    it "complains about a command the device refused, with the device's reason" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          exchange conn theirs GetPlayers (const (pure ())) [failedLine]
+            `shouldThrow` (== Refused (Just 2) (Just "ID Not Valid"))
+          complaints <$> seen >>= (`shouldSatisfy` any ("ID Not Valid" `isInfixOf`))
+
+    it "complains about a command the device never answered" $
+      withSocketPair $ \(ours, _) -> do
+        (spy, seen) <- capturing
+        runWith testParams{commandTimeout = Seconds 0.1, logger = spy} ours $ \conn -> do
+          outcome <- timeout 2000000 (try @CommandError (sendCommand conn HeartBeat))
+          outcome `shouldBe` Just (Left NoReply)
+          complaints <$> seen >>= (`shouldSatisfy` (not . null))
+
+    it "complains about a command cut short by the device hanging up" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        _ <- try @ConnectionError $ runWith testParams{logger = spy} ours $ \conn -> do
+          withAsync (recv theirs 4096 >> close theirs) $ \_ ->
+            sendCommand conn (GetVolume (PlayerId 1))
+        complaints <$> seen >>= (`shouldSatisfy` (not . null))
+
+    -- One line per command, whether it went well or not: a failure is
+    -- not also counted as a success.
+    it "does not note a failed command as served" $
+      withSocketPair $ \(ours, theirs) -> do
+        (spy, seen) <- capturing
+        runWith testParams{logger = spy} ours $ \conn -> do
+          exchange conn theirs GetPlayers (const (pure ())) [failedLine]
+            `shouldThrow` (== Refused (Just 2) (Just "ID Not Valid"))
+          entries <- seen
+          [msg | (sev, msg) <- entries, sev < Warn] `shouldBe` []
+
   describe "when the connection dies" $ do
     it "a command waiting for its reply fails with ConnectionLost, not a hang" $
       withSocketPair $ \(ours, theirs) -> do
@@ -532,6 +661,21 @@ spec = do
             atomically $ readTVar seen >>= \l -> check (beatsOn EventsLane l >= 3 && beatsOn CommandsLane l >= 3)
           done `shouldBe` Just ()
           readTVarIO seen >>= \l -> map (commandPath . snd) l `shouldSatisfy` all (== "system/heart_beat")
+
+    -- Every beat is a command like any other, so each leaves its line:
+    -- two sockets, two lines per interval.
+    it "notes the beats of both sockets in the log" $
+      withLanes $ \sockets dev ->
+        withAnsweringDevice dev $ \seen -> do
+          (spy, said) <- capturing
+          let params = testParams{heartbeatDelay = Seconds 0.05, logger = spy}
+              beatsOn lane = length . filter ((== lane) . fst)
+          -- three beats sent on each lane: at least two on each are over
+          _ <- timeout 2000000 $ runConnection params sockets $ \_ ->
+            atomically $ readTVar seen >>= \l -> check (beatsOn EventsLane l >= 3 && beatsOn CommandsLane l >= 3)
+          noted <- filter ("HeartBeat" `isInfixOf`) . map snd <$> said
+          length noted `shouldSatisfy` (>= 4)
+          complaints <$> said `shouldReturn` []
 
     -- A heartbeat nobody answers is how the daemon learns the link is dead
     -- without anyone sending a command: the connection must end with an

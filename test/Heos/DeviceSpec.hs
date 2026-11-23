@@ -8,7 +8,7 @@ module Heos.DeviceSpec (spec) where
 import Control.Concurrent.Async (race, withAsync)
 import Control.Concurrent.STM (TVar, atomically, check, modifyTVar', newTVarIO, readTVar, readTVarIO)
 import Control.Exception (bracket)
-import Data.List (elemIndex)
+import Data.List (elemIndex, isInfixOf)
 import Data.Maybe (isJust)
 import Data.Void (absurd)
 import Control.Retry (constantDelay)
@@ -21,6 +21,7 @@ import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosC
 import Data.Text (Text)
 import Heos.Device (Catalogue (..), LiveState (..), initialize, searchable, tracker)
 import Heos.Error (CommandError (..))
+import Heos.Logger (Severity (..), capturing)
 import Heos.FakeDevice (answeringWith, commandPath, commandQuery, failReply, fixture, messageReply, scripted)
 import Heos.Time (Seconds (..))
 import Heos.Types
@@ -30,7 +31,7 @@ import System.Timeout (timeout)
 import Test.Hspec
 
 params :: HeosConnectionParams
-params = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing}
+params = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing, logger = mempty}
 
 -- The player the connection came up with; the fixtures are recorded from it.
 thePid :: PlayerId
@@ -43,13 +44,15 @@ data Lane = EventsLane | CommandsLane deriving (Show, Eq)
 -- source: the fixture is Tidal's, and the test only counts and keys them.
 startUpReplies :: IO (ByteString -> ByteString)
 startUpReplies = do
+  player <- fixture "get_player_info.json"
   players <- fixture "get_players.json"
   sources <- fixture "get_music_sources.json"
   criteria <- fixture "search_criteria.json"
   nowPlaying <- fixture "now_playing.json"
   pure $
     scripted
-      [ ("player/get_players", players)
+      [ ("player/get_player_info", player)
+      , ("player/get_players", players)
       , ("browse/get_music_sources", sources)
       , ("browse/get_search_criteria", criteria)
       , ("player/get_now_playing_media", nowPlaying)
@@ -88,7 +91,7 @@ withStartUp reply = withFake reply (\conn _ -> initialize conn)
 
 -- Parameters with an account to sign in with.
 signedIn :: HeosConnectionParams
-signedIn = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Just Credentials{login = "listener@example.com", password = "secret"}, address = Nothing}
+signedIn = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Just Credentials{login = "listener@example.com", password = "secret"}, address = Nothing, logger = mempty}
 
 -- The query without its SEQUENCE number.
 dropSeq :: ByteString -> ByteString
@@ -129,7 +132,11 @@ awaitState state p =
 -- A catalogue made by hand: sources with the three things 'searchable'
 -- looks at, and the criteria the device listed for each.
 catalogueWith :: [MusicSource] -> [(SourceId, [SearchCriterion])] -> Catalogue
-catalogueWith sources criteria = Catalogue{players = [], sources, criteria = Map.fromList criteria, account = Nothing}
+catalogueWith sources criteria = Catalogue{player = somePlayer, players = [], sources, criteria = Map.fromList criteria, account = Nothing}
+
+-- 'searchable' does not look at the player; the catalogue just needs one.
+somePlayer :: Player
+somePlayer = Player{name = "Amp", pid = PlayerId 1, model = "Amp", version = "1", ip = "127.0.0.1", network = Wired, lineout = 0, serial = ""}
 
 source :: Text -> Int -> Bool -> Maybe Text -> MusicSource
 source name n available serviceUsername =
@@ -140,6 +147,16 @@ criterion name n = SearchCriterion{name, scid = SearchCriteriaId n, wildcard = F
 
 trackAndAlbum :: [SearchCriterion]
 trackAndAlbum = [criterion "Track" 3, criterion "Album" 2]
+
+-- What the library said through its logger: something at exactly this
+-- severity that mentions the text.
+said :: Severity -> String -> [(Severity, String)] -> Bool
+said sev text = any (\(s, msg) -> s == sev && text `isInfixOf` msg)
+
+-- The complaints: what was logged at Warn or above. The tests here do not
+-- tell a warning from an error; that line is the library's to draw.
+complaints :: [(Severity, String)] -> [String]
+complaints entries = [msg | (sev, msg) <- entries, sev >= Warn]
 
 spec :: Spec
 spec = do
@@ -211,6 +228,14 @@ spec = do
       ((catalogue, _), _) <- withStartUp reply
       map (.pid) catalogue.players `shouldBe` [thePid]
 
+    -- The player the connection works with, as the device describes it:
+    -- its name and firmware are what a person recognises the device by.
+    it "keeps the description of the connection's player" $ do
+      reply <- startUpReplies
+      ((catalogue, _), _) <- withStartUp reply
+      catalogue.player.pid `shouldBe` thePid
+      catalogue.player.name `shouldBe` "Marantz MODEL 60n"
+
     -- The live state starts from the replies; from here on the events keep
     -- it current.
     it "takes what plays, the volume and the play state from the replies" $ do
@@ -261,6 +286,44 @@ spec = do
       ((catalogue, _), commands) <- withFakeWith signedIn refusing (\conn _ -> initialize conn)
       catalogue.account `shouldBe` Nothing
       map (commandPath . snd) commands `shouldContain` ["browse/get_music_sources"]
+
+    -- Stage 34: what the start-up tells the log. The messages are matched
+    -- by what they must carry (who, why), not by their wording.
+    it "says who it signed in as" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      _ <- withFakeWith signedIn{logger = spy} reply (\conn _ -> initialize conn)
+      seen >>= (`shouldSatisfy` said Info "listener@example.com")
+
+    it "complains about a refused sign-in, with the device's reason" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      let refusing line
+            | commandPath line == "system/sign_in" = failReply "system/sign_in" "eid=10&text=User not found"
+            | otherwise = reply line
+      _ <- withFakeWith signedIn{logger = spy} refusing (\conn _ -> initialize conn)
+      complaints <$> seen >>= (`shouldSatisfy` any ("User not found" `isInfixOf`))
+
+    -- The sign-in command carries the password on the wire. Whatever the
+    -- daemon logs about it, at any level, the password stays out.
+    it "keeps the password out of the log, signed in or refused" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      let refusing line
+            | commandPath line == "system/sign_in" = failReply "system/sign_in" "eid=10&text=User not found"
+            | otherwise = reply line
+      _ <- withFakeWith signedIn{logger = spy} reply (\conn _ -> initialize conn)
+      _ <- withFakeWith signedIn{logger = spy} refusing (\conn _ -> initialize conn)
+      entries <- seen
+      entries `shouldSatisfy` (not . null)
+      map snd entries `shouldSatisfy` all (not . ("secret" `isInfixOf`))
+
+    it "has nothing to complain about when the start-up goes well" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      _ <- withFakeWith params{logger = spy} reply (\conn _ -> initialize conn)
+      _ <- withFakeWith signedIn{logger = spy} reply (\conn _ -> initialize conn)
+      complaints <$> seen `shouldReturn` []
 
   -- Stage 30's check: "what plays" is answered from the cache, so the cache
   -- has to follow the device. The events carry volume and play state
@@ -351,6 +414,84 @@ spec = do
       withTrackerWith params{commandTimeout = Seconds 0.1} silent events $ \state -> do
         live <- awaitState state ((== 3) . (.volume))
         live.nowPlaying `shouldBe` Nothing
+
+    -- Stage 34: a track the tracker could not refresh leaves the old one
+    -- in the state, so each failure above has to show up in the log, and
+    -- nothing when all is well. How many lines a failure takes is not
+    -- pinned: the connection reports the failed command, the tracker what
+    -- it did about it.
+    it "complains about a refused now-playing query, with the device's reason" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      let refusing line
+            | commandPath line == "player/get_now_playing_media" = failReply "player/get_now_playing_media" "eid=12&text=System error"
+            | otherwise = reply line
+          events =
+            [ eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_volume_changed" "pid=-1245882071&level=3&mute=off"
+            ]
+      withTrackerWith params{logger = spy} refusing events $ \state -> do
+        _ <- awaitState state ((== 3) . (.volume))
+        complaints <$> seen >>= (`shouldSatisfy` any ("System error" `isInfixOf`))
+
+    -- A reply without a payload is not a failure: it decodes as "nothing
+    -- plays", the state takes it, and there is nothing to report.
+    it "does not complain about a now-playing reply without a track" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      let idle line
+            | commandPath line == "player/get_now_playing_media" = messageReply "player/get_now_playing_media" "pid=-1245882071"
+            | otherwise = reply line
+          events =
+            [ eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_volume_changed" "pid=-1245882071&level=3&mute=off"
+            ]
+      withTrackerWith params{logger = spy} idle events $ \state -> do
+        _ <- awaitState state ((== 3) . (.volume))
+        complaints <$> seen `shouldReturn` []
+
+    it "complains about a now-playing query the device never answers" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      let mute line
+            | commandPath line == "player/get_now_playing_media" = "" -- nothing goes back
+            | otherwise = reply line
+          events =
+            [ eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_volume_changed" "pid=-1245882071&level=3&mute=off"
+            ]
+      withTrackerWith params{commandTimeout = Seconds 0.1, logger = spy} mute events $ \state -> do
+        _ <- awaitState state ((== 3) . (.volume))
+        complaints <$> seen >>= (`shouldSatisfy` (not . null))
+
+    it "complains about every failed query, not only the first" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      let refusing line
+            | commandPath line == "player/get_now_playing_media" = failReply "player/get_now_playing_media" "eid=12&text=System error"
+            | otherwise = reply line
+          events =
+            [ eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_volume_changed" "pid=-1245882071&level=3&mute=off"
+            ]
+      withTrackerWith params{logger = spy} refusing events $ \state -> do
+        _ <- awaitState state ((== 3) . (.volume))
+        length . complaints <$> seen >>= (`shouldSatisfy` (>= 3))
+
+    it "has nothing to complain about while the events are in order" $ do
+      reply <- startUpReplies
+      (spy, seen) <- capturing
+      let events =
+            [ eventLine "player_state_changed" "pid=-1245882071&state=pause"
+            , eventLine "player_now_playing_changed" "pid=-1245882071"
+            , eventLine "player_queue_changed" "pid=-1245882071"
+            , eventLine "player_volume_changed" "pid=-1245882071&level=3&mute=off"
+            ]
+      withTrackerWith params{logger = spy} reply events $ \state -> do
+        _ <- awaitState state ((== 3) . (.volume))
+        complaints <$> seen `shouldReturn` []
 
     it "ignores events about other things" $ do
       reply <- startUpReplies

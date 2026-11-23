@@ -22,10 +22,12 @@ defaultParams =
           , address = Nothing
           , retryPolicy = (capDelay . toMicros) (Seconds 60) $ (exponentialBackoff . toMicros) (Seconds 1)
           , account = Nothing
+          , logger = mempty
           }
     , avr =
         AvrConnectionParams
           { port = 23
           , requestTimeout = Seconds 1
+          , logger = mempty
           }
     }

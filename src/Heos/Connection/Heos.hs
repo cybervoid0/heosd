@@ -61,6 +61,7 @@ import Heos.Envelope.Heos (
   findError,
  )
 import Heos.Error (CommandError (..), ConnectionError (..))
+import Heos.Logger (Logger (..), Severity (..), logged)
 import Heos.Time (toMicros)
 import Heos.Types
 import Heos.Url (decodeQuery, lookupParam)
@@ -147,6 +148,7 @@ reader sock conn = go emptyPending `finally` failAll
     forM_ complete route
     when (pending'.size > conn.params.maxLineLength) $ throwIO LineTooLong
     go pending'
+  logAt = conn.params.logger.logAt
   -- одна полная строка: разобрать и доставить по назначению
   route bs = do
     let eitherIncEnv = classifyEnvelope <$> eitherDecodeStrict bs
@@ -159,8 +161,8 @@ reader sock conn = go emptyPending `finally` failAll
           let HeosHeader{command, message} = env.heos
               mbBox = findBox command message waiting
           maybe (pure False) (\box -> tryPutTMVar box (Right env)) mbBox
-        unless delivered $ putStrLn ("stray reply: " <> show env)
-      Left err -> print $ show bs <> err
+        unless delivered $ logAt Warn ("Stray reply: " <> show env)
+      Left err -> logAt Warn $ "Unreadable line: " <> show bs <> ": " <> err
   -- при любом завершении (`finally`): пройти по всей карте, положить в каждую коробочку `Left ConnectionLost`, карту очистить.
   failAll = atomically $ do
     mapping <- readTVar conn.waiting
@@ -194,23 +196,16 @@ subscribe conn = atomically $ dupTChan conn.props.events
 --   No reply in time is 'NoReply', a fail reply is 'Refused'.
 sendOn :: Socket -> ConnectionProps -> Command a -> IO a
 sendOn sock props cmd = withMVar props.sendLock $ \_ -> do
-  -- взять номер и сдвинуть счётчик; modifyTVar' вычисляет n + 1 сразу,
-  -- иначе в TVar лежал бы thunk до следующего чтения
   seqNo <- atomically $ readTVar props.nextSeq <* modifyTVar' props.nextSeq (+ 1)
   box <- newEmptyTMVarIO
   let waiting = Waiting{box, path = fst . commandParts $ cmd}
-  bracket_ (open seqNo waiting) (closeBox seqNo) (go seqNo box)
- where
-  -- кладём в карту пустую ячейку под будущий ответ от устройства
-  open seqNo waiting = atomically $ modifyTVar' props.waiting (Map.insert seqNo waiting)
-  -- в завершении или при обрыве соединения - удалить ячейку
-  closeBox seqNo = atomically $ modifyTVar' props.waiting (Map.delete seqNo)
-  go seqNo box = do
+      register = atomically $ modifyTVar' props.waiting (Map.insert seqNo waiting)
+      forget = atomically $ modifyTVar' props.waiting (Map.delete seqNo)
+  bracket_ register forget . logged props.params.logger (show cmd) $ do
     -- заменить IOException на ConnectionLost при отправке байтов в сокет
     handle (\(_ :: IOException) -> throwIO ConnectionLost) $
       sendAll sock (renderCommand seqNo cmd)
-    -- `reader` уже получил ответ на эту команду и положил в ячейку, нужно её
-    -- достать и вернуть, а в случае если не уложились в таймаут - бросить исключение
+    -- `reader` уже получил ответ на эту команду и положил в ячейку, нужно её достать и вернуть, а в случае если не уложились в таймаут - бросить исключение
     env <- timeout (toMicros props.params.commandTimeout) (atomically $ takeTMVar box) >>= maybe (throwIO NoReply) (either throwIO pure)
 
     case (env.heos.result, env.heos.message) of
