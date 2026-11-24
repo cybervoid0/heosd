@@ -12,7 +12,7 @@ module Heos.Device (
 import Control.Arrow ((>>>))
 import Control.Concurrent.Async (race)
 import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
-import Control.Exception (Exception (displayException), handle, throwIO, try)
+import Control.Exception (Exception (displayException), finally, handle, throwIO, try)
 import Control.Monad (forM, forM_, forever)
 import Control.Monad.Catch (Handler (..))
 import Control.Retry (recovering)
@@ -37,7 +37,7 @@ import Heos.Error (CommandError (..), ConnectionError (NoPlayers), DiscoveryErro
 import Heos.Logger (Logger (..), Severity (..), logAt)
 import Heos.Types
 import Heos.Url (lookupParam)
-import Network.Socket (HostAddress, SockAddr (SockAddrInet))
+import Network.Socket (HostAddress, PortNumber, SockAddr (SockAddrInet))
 import Text.Read (readMaybe)
 
 data Device = Device
@@ -85,9 +85,9 @@ withDevice params = reconnecting params findAddr
     let logAt = params.heos.logger.logAt
         numDevs = NE.length hosts
         port = params.heos.port
-        addr = SockAddrInet port host
+        addr = showAddr port host
     case numDevs of
-      1 -> logAt Debug $ "Found HEOS device: " <> show addr
+      1 -> logAt Debug $ "Found HEOS device: " <> addr
       n -> logAt Warn $ "Found " <> show n <> " HEOS devices, taking " <> show addr
 
 type ShouldRetry e = (Exception e) => e -> IO Bool
@@ -112,23 +112,26 @@ reconnecting params findAddr act = go
         , const . Handler $ checkAndLogError @CommandError
         ]
 
-  deviceInit established conn = withAvr params.avr (getAddr conn) $ \avrConn -> do
+  deviceInit established conn = withAvr params.avr hostAddr $ \avrConn -> do
     chan <- subscribe conn
     (catalogue, liveState) <- initialize conn
     state <- newTVarIO liveState
     let dev = Device{heos = conn, avr = avrConn, catalogue, state}
     initLog dev
     writeIORef established True
-    race (tracker chan state conn) (act dev) >>= either absurd pure
+    let concurrent = race (tracker chan state conn) (act dev) >>= either absurd pure
+    concurrent `finally` exitLog catalogue
    where
+    hostAddr = getAddr conn
+    exitLog (Catalogue{player}) = logAt Info ("Disconnected from " <> showAddr conn.props.params.port hostAddr <> ": " <> T.unpack player.model)
     initLog dev = do
       let port = conn.props.params.port
-          address = SockAddrInet port (getAddr conn)
+          address = showAddr port hostAddr
           player = dev.catalogue.player
           playerInfo = T.unpack player.model <> ", firmware " <> T.unpack player.version
           numSources = length dev.catalogue.sources
           sourcesInfo = show numSources <> " source" <> (if numSources > 1 then "s" else "")
-      logAt Info $ "Connected to " <> show address <> ": " <> playerInfo <> ", " <> sourcesInfo
+      logAt Info $ "Connected to " <> address <> ": " <> playerInfo <> ", " <> sourcesInfo
 
 tracker :: TChan HeosEvent -> TVar LiveState -> HeosConnection -> IO Void
 tracker chan state conn =
@@ -179,3 +182,6 @@ signIn conn = case account of
  where
   logAt = conn.props.params.logger.logAt
   account = conn.props.params.account
+
+showAddr :: PortNumber -> HostAddress -> String
+showAddr port hostAddr = show (SockAddrInet port hostAddr)

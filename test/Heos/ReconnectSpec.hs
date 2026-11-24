@@ -7,7 +7,7 @@ import Control.Exception (ErrorCall (..), IOException, bracket, finally, throwIO
 import Control.Monad (forever, void, when)
 import Control.Retry (constantDelay, exponentialBackoff)
 import Data.ByteString (ByteString)
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, isPrefixOf)
 import GHC.Clock (getMonotonicTime)
 import Heos.Command.Heos (Command (..))
 import Heos.Command.Avr (AvrCommand (..))
@@ -417,7 +417,42 @@ spec = describe "reconnecting" $ do
         when (n == 1) (putMVar started () >> threadDelay 5000000)
       wait device
       said <- reports <$> seen
-      length (filter ("127.0.0.1" `isInfixOf`) said) `shouldBe` 2
+      length (filter ("Connected" `isPrefixOf`) said) `shouldBe` 2
+
+  -- Every connection that came up is reported when it ends, whatever
+  -- ended it: here the device drops the first, the action ends the second.
+  it "reports the end of every connection that came up" $
+    withDevice $ \params srv -> do
+      (spy, seen) <- capturing
+      (start, _) <- counting
+      started <- newEmptyMVar
+      well <- echoing
+      device <- async $ do
+        withBoth srv $ \a b -> race_ (answerBoth well a b) (takeMVar started)
+        serve srv
+      _ <- bounded $ reconnecting (loggingTo spy params) (pure loopback) $ \_ -> do
+        n <- start
+        when (n == 1) (putMVar started () >> threadDelay 5000000)
+      wait device
+      said <- reports <$> seen
+      let ended = filter ("Disconnected" `isPrefixOf`) said
+      length ended `shouldBe` 2
+      ended `shouldSatisfy` all ("127.0.0.1" `isInfixOf`)
+
+  -- A connect the port refused never came up: there is nothing to end.
+  it "does not report the end of a connection that never came up" $
+    withAmp $ \amp -> do
+      (spy, seen) <- capturing
+      port <- freePort
+      asked <- newTVarIO (0 :: Int)
+      let findAddr = atomically (modifyTVar' asked (+ 1)) >> pure loopback
+      device <- async $ do
+        atomically $ readTVar asked >>= check . (>= 3)
+        withDeviceOn port (const serve)
+      _ <- bounded $ reconnecting (loggingTo spy (paramsFor port amp)) findAddr (\_ -> pure ())
+      wait device
+      said <- reports <$> seen
+      length (filter ("Disconnected" `isPrefixOf`) said) `shouldBe` 1
 
   it "complains once when the link drops" $
     withDevice $ \params srv -> do
