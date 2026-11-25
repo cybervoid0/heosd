@@ -7,11 +7,13 @@ module Heos.Device (
   reconnecting,
   initialize,
   tracker,
+  withSupervised,
 ) where
 
 import Control.Arrow ((>>>))
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race)
-import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan)
+import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, readTChan, readTVar, retry, writeTVar)
 import Control.Exception (Exception (displayException), finally, handle, throwIO, try)
 import Control.Monad (forM, forM_, forever)
 import Control.Monad.Catch (Handler (..))
@@ -33,11 +35,13 @@ import Heos.Connection.Types (ConnectionProps (..), ConnectionSockets (..), Heos
 import Heos.Device.Parameters (DeviceParams (..))
 import Heos.Discovery (discover)
 import Heos.Envelope.Heos (HeosEvent (HeosEvent))
-import Heos.Error (CommandError (..), ConnectionError (NoPlayers), DiscoveryError)
+import Heos.Error (CommandError (..), ConnectionError (NoPlayers, Unavailable), DiscoveryError)
 import Heos.Logger (Logger (..), Severity (..), logAt)
+import Heos.Time (toMicros)
 import Heos.Types
 import Heos.Url (lookupParam)
 import Network.Socket (HostAddress, PortNumber, SockAddr (SockAddrInet))
+import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
 data Device = Device
@@ -72,6 +76,26 @@ data LiveState = LiveState
   , volume :: Int
   , playState :: PlayState
   }
+
+data Link = Down | Up Device
+
+withSupervised :: DeviceParams -> (IO Device -> IO a) -> IO a
+withSupervised params server = do
+  link <- newTVarIO Down
+  -- prepares supervisor action
+  let supervise = withDevice params $ \dev -> (atomically (writeTVar link (Up dev)) >> forever (threadDelay maxBound)) `finally` atomically (writeTVar link Down)
+      -- tries getting device from the box, and repeats if it's DOWN
+      getDev =
+        atomically $
+          readTVar link >>= \case
+            Up dev -> pure dev
+            Down -> retry
+      -- action limiting the device search time
+      getDevTimeLimited = timeout ms getDev >>= maybe (throwIO Unavailable) pure
+  -- concurrently runs the supervisor and the server
+  race supervise (server getDevTimeLimited) >>= either absurd pure
+ where
+  ms = toMicros params.heos.commandTimeout
 
 withDevice :: DeviceParams -> (Device -> IO a) -> IO a
 withDevice params = reconnecting params findAddr

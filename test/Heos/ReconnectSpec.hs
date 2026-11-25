@@ -15,9 +15,9 @@ import Heos.Connection.Avr (AvrConnectionParams (..), sendAvrCommand)
 import Heos.Connection.Heos (sendCommand)
 import Heos.Connection.Types (HeosConnectionParams (..))
 import Heos.Connection.Types qualified as HeosParams
-import Heos.Device (Device (..), LiveState (..), reconnecting)
+import Heos.Device (Device (..), LiveState (..), reconnecting, withSupervised)
 import Heos.Device.Parameters (DeviceParams (..))
-import Heos.Error (CommandError (..), DiscoveryError (..))
+import Heos.Error (CommandError (..), ConnectionError (..), DiscoveryError (..))
 import Heos.Logger (Logger, Severity (..), capturing)
 import Heos.FakeDevice (answeringWith, failReply, fixture, messageReply, playerInfoLine, playersLine)
 import Heos.FakeDevice qualified as Fake
@@ -226,7 +226,10 @@ reports :: [(Severity, String)] -> [String]
 reports entries = [msg | (sev, msg) <- entries, sev >= Info]
 
 spec :: Spec
-spec = describe "reconnecting" $ do
+spec = reconnectingSpec >> supervisedSpec
+
+reconnectingSpec :: Spec
+reconnectingSpec = describe "reconnecting" $ do
   it "connects once and returns what the action returns" $
     withDevice $ \params srv -> do
       (findAddr, asked) <- scripted [Right loopback]
@@ -573,3 +576,70 @@ spec = describe "reconnecting" $ do
         result `shouldBe` 2
  where
   eof = mkIOError eofErrorType "getLine" Nothing Nothing
+
+-- Stage 34a: the supervisor. The server runs for the life of the process;
+-- the connection is a part that comes and goes behind it. The server sees
+-- none of that machinery, only the action that hands out the current
+-- device: it waits a little for one, and when none comes, it says so.
+supervisedSpec :: Spec
+supervisedSpec = describe "withSupervised" $ do
+  -- The device is off at start. The old way, nothing ran until it
+  -- answered; now the server runs at once, and asking for the device
+  -- gives Unavailable after the wait instead of hanging. Once the device
+  -- is up, the next ask waits for the connection and gets the device,
+  -- start-up done.
+  it "tells the server the device is unavailable, then hands it out once it answers" $
+    withAmp $ \amp -> do
+      port <- freePort
+      (first, volume, device) <- bounded $ withSupervised (supervised (paramsFor port amp)) $ \getDevice -> do
+        first <- try @ConnectionError getDevice
+        device <- async (withDeviceOn port (const serve))
+        volume <- getDevice >>= volumeOf
+        pure (first, volume, device)
+      unavailable first `shouldBe` True
+      volume `shouldBe` 15
+      wait device
+
+  -- The device drops the link under a running server and comes back with
+  -- the volume at 30. The server asks again until the device it gets is
+  -- the new one, and it is still the same run of the server: nothing
+  -- restarted it.
+  it "hands out the new device after a reconnect, without restarting the server" $
+    withDevice $ \params srv -> do
+      pulled <- newEmptyMVar
+      well <- echoing
+      louder <- deviceThat [("player/get_volume", messageReply "player/get_volume" "pid=1&level=30")]
+      device <- async $ do
+        withBoth srv $ \a b -> race_ (answerBoth well a b) (takeMVar pulled)
+        serveWith louder srv
+      (start, runs) <- counting
+      volumes <- bounded $ withSupervised (supervised params) $ \getDevice -> do
+        _ <- start
+        first <- getDevice >>= volumeOf
+        putMVar pulled ()
+        let untilNew = do
+              volume <- getDevice >>= volumeOf
+              if volume == 30 then pure volume else threadDelay 10000 >> untilNew
+        second <- untilNew
+        pure (first, second)
+      volumes `shouldBe` (15, 30)
+      runs >>= (`shouldBe` 1)
+      wait device
+
+  -- The server is done: withSupervised hands back its result and takes
+  -- the connection down with it. The device sees the hang-up, which is
+  -- what lets serve return.
+  it "returns the server's result and closes the connection" $
+    withDevice $ \params srv -> do
+      device <- async (serve srv)
+      result <- bounded $ withSupervised (supervised params) $ \getDevice ->
+        ("done" :: String) <$ getDevice
+      result `shouldBe` "done"
+      bounded (wait device)
+ where
+  -- An address in the parameters: no SSDP search in a test.
+  supervised = withHeos (\h -> h{address = Just loopback})
+  volumeOf dev = (.volume) <$> readTVarIO dev.state
+  unavailable = \case
+    Left Unavailable -> True
+    _ -> False

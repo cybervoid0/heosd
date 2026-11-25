@@ -25,12 +25,14 @@ data ConnectionError
   | LineTooLong
   | NoPlayers
   | BackgroundFailure SomeException
+  | Unavailable
   deriving (Show)
 instance Exception ConnectionError where
   displayException ConnectionLost = "Heos device closed the connection"
   displayException LineTooLong = "Heos device sent a line longer than allowed"
   displayException NoPlayers = "No Heos players in the local network"
   displayException (BackgroundFailure e) = "A background thread died: " <> displayException e
+  displayException Unavailable = "HEOS device is not available, reconnecting"
 
 data CommandError
   = -- | eid / text

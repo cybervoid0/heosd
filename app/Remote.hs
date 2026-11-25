@@ -1,37 +1,47 @@
 module Remote (remote) where
 
+import Control.Exception (Exception (displayException), Handler (Handler), catches)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful (Eff, MonadIO (liftIO), runEff, (:>))
-import Effectful.Exception (throwIO, try)
+import Effectful.Exception (throwIO)
 import Heos
 
 -- Стенд
 remote :: DeviceParams -> IO ()
 remote params = do
   putStrLn $ "HEOS remote controller\n" <> help
-  withDevice params $ \dev -> runEff . runHeosLive dev . runAvrLive dev.avr $ go
+  withSupervised params go
  where
-  go =
-    liftIO getLine >>= \case
+  go getDevice =
+    getLine >>= \case
       "q" -> pure ()
-      line -> guarded (run line) >> go
+      line -> guarded (getDevice >>= runLine line) >> go getDevice
+
+  runLine line dev = runEff . runHeosLive dev . runAvrLive dev.avr $ run line
+
   run = \case
     ('s' : rest) -> findMany TrackKind (trim rest) >>= liftIO . mapM_ (printTable . foundToRow)
     ('p' : 't' : query) -> find TrackKind (trim query)
     ('p' : 'a' : query) -> find AlbumKind (trim query)
     line -> fromMaybe (liftIO $ putStrLn help) (lookup line keys)
+
   find kind query = do
     found <- findOne kind query
     liftIO . printTable . foundToRow $ found
     playItem found.target
   foundToRow f = (Just f.name, f.artist, f.album)
+
   guarded act =
-    try act >>= \case
-      Left (Refused eid text) -> liftIO . putStrLn $ "Device refused: " <> maybe "" T.unpack text <> " (eid " <> maybe "?" show eid <> ")"
-      _ -> pure ()
+    act
+      `catches` [ Handler $ \(e :: CommandError) -> putStrLn (displayException e)
+                , Handler $ \(e :: AvrError) -> putStrLn (displayException e)
+                , Handler $ \(e :: ConnectionError) -> putStrLn (displayException e)
+                ]
+
   printTable = putStrLn . T.unpack . parseRow
+
   printRes key = liftIO . putStrLn . ((key <> ": ") <>) . show
   keys =
     [ ("off", turnOff)
@@ -53,6 +63,7 @@ remote params = do
       )
     , ("que", showQueue >>= liftIO . mapM_ (printTable . trackToRow))
     ]
+
   trackToRow t = (Just t.song, Just t.artist, Just t.album)
   help = "Commands: on ‧ off ‧ > ‧ || ‧ >> ‧ << ‧ + ‧ - ‧ v (volume) ‧ ps (play state) ‧ np (now playing) ‧ s <query> (search) ‧ pt <query> (play track) ‧ pa <query> (play album) ‧ que (tracks queue) ‧ q (quit)"
 
