@@ -41,7 +41,7 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Unbounded:wght@500&display=swap">
   <style>
-    /* Слоистая схема сверху вниз, под ней одна колонка текста: путь одной просьбы и две границы */
+    /* Слоистая схема сверху вниз, под ней одна колонка текста: путь команды, обрыв связи, потоки, границы */
     :root {
       --bg: #f4f6f8;
       --surface: #ffffff;
@@ -250,14 +250,15 @@
       fill: var(--pure-ink);
     }
 
-    .t-chip {
-      font-family: var(--f-body);
-      font-size: 10.5px;
-      font-weight: 600;
-      fill: var(--pure-ink);
+    .todo-box {
+      fill: none;
+      stroke: var(--line);
+      stroke-width: 1;
+      stroke-dasharray: 5 4;
     }
 
-    .t-chip.todo {
+    .t-name.todo,
+    .t-mod.todo {
       fill: var(--muted);
     }
 
@@ -301,7 +302,15 @@
       margin-top: 6px;
     }
 
-    /* две границы */
+    ul.plain {
+      margin: 0;
+      padding-left: 20px;
+      max-width: 72ch;
+      display: grid;
+      gap: 8px;
+    }
+
+    /* границы */
     .bounds {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -341,12 +350,13 @@
 
   <div class="wrap">
     <h1>Архитектура heosd</h1>
-    <p class="lede">Как устроен MVP: от просьбы агента до усилителя и обратно. Подписи слева — части роудмапа.</p>
+    <p class="lede">Как heosd устроен сейчас: от команды в терминале до усилителя и обратно, и что происходит, когда
+      связь рвётся. Подписи слева — части роадмапа.</p>
 
     <figure>
       <div class="scroll">
-        <svg class="arch" viewBox="0 0 1000 950" role="img"
-          aria-label="Слоистая схема heosd. Агент вызывает MCP-сервер по HTTP, тот вызывает сценарии, сценарии работают только через эффект Heos. Живой обработчик идёт через соединение к усилителю по двум сокетам на порту 1255; питание — отдельный эффект Power через порт 23; тестовый обработчик читает записанные ответы. Протокол — чистый код без IO, соединение использует его, чтобы собирать и разбирать строки.">
+        <svg class="arch" viewBox="0 0 1000 1080" role="img"
+          aria-label="Слоистая схема heosd. Пульт в терминале, а позже MCP-клиенты, получают устройство через супервизор. Супервизор держит ячейку Down или Up Device и переподключается сам. Сценарии работают через эффекты Heos и Avr; живые обработчики читают кэш устройства и шлют команды через соединение, тестовые работают в памяти. Heos.Device держит одну связь: поиск адреса, повтор с backoff, start-up и tracker событий. Соединение открывает два сокета на порт 1255, у каждого свой reader и heartbeat; питание идёт по телнету на порт 23. Протокол — чистый код без IO.">
           <defs>
             <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
               orient="auto-start-reverse">
@@ -359,197 +369,263 @@
           </defs>
 
           <!-- как читать -->
-          <text x="744" y="34" class="t-part">КАК ЧИТАТЬ</text>
-          <rect x="744" y="47" width="22" height="14" rx="3" class="box" />
-          <text x="776" y="58" class="t-sub">код с IO</text>
-          <rect x="744" y="71" width="22" height="14" rx="3" class="pure-box" />
-          <text x="776" y="82" class="t-sub">чистый код, без IO</text>
-          <line x1="744" y1="102" x2="766" y2="102" class="edge dash" />
-          <text x="776" y="106" class="t-sub">путь в тестах</text>
+          <text x="744" y="30" class="t-part">КАК ЧИТАТЬ</text>
+          <rect x="744" y="40" width="22" height="13" rx="3" class="box" />
+          <text x="776" y="51" class="t-sub">код с IO</text>
+          <rect x="744" y="60" width="22" height="13" rx="3" class="pure-box" />
+          <text x="776" y="71" class="t-sub">чистый код, без IO</text>
+          <rect x="744" y="80" width="22" height="13" rx="3" class="todo-box" />
+          <text x="776" y="91" class="t-sub">ещё не написано</text>
+          <line x1="744" y1="106" x2="766" y2="106" class="edge dash" />
+          <text x="776" y="110" class="t-sub">путь в тестах</text>
 
           <!-- подписи частей -->
           <text x="24" y="50" class="t-part">СНАРУЖИ</text>
           <text x="24" y="144" class="t-part">ЧАСТЬ 6</text><text x="24" y="160" class="t-partname">наружу</text>
-          <text x="24" y="244" class="t-part">ЧАСТЬ 5</text><text x="24" y="260" class="t-partname">умения</text>
-          <text x="24" y="344" class="t-part">ЧАСТЬ 4</text><text x="24" y="360" class="t-partname">эффекты</text>
-          <text x="24" y="444" class="t-part">ЧАСТЬ 4</text><text x="24" y="460" class="t-partname">обработчики</text>
-          <text x="24" y="640" class="t-part">ЧАСТИ 2–3</text><text x="24" y="656" class="t-partname">сеть</text>
-          <text x="24" y="884" class="t-part">УСТРОЙСТВО</text>
+          <text x="24" y="250" class="t-part">ЭТАП 34a</text><text x="24" y="266" class="t-partname">супервизор</text>
+          <text x="24" y="354" class="t-part">ЧАСТЬ 4</text><text x="24" y="370" class="t-partname">эффекты</text>
+          <text x="24" y="458" class="t-part">ЧАСТЬ 4</text><text x="24" y="474" class="t-partname">обработчики</text>
+          <text x="24" y="620" class="t-part">ЧАСТИ 3, 5</text><text x="24" y="636" class="t-partname">одна связь</text>
+          <text x="24" y="835" class="t-part">ЧАСТИ 2–3</text><text x="24" y="851" class="t-partname">сеть</text>
+          <text x="24" y="1015" class="t-part">АППАРАТ</text>
 
           <!-- снаружи -->
-          <rect x="150" y="20" width="175" height="52" rx="6" class="box" />
-          <text x="164" y="42" class="t-name">Hermes</text>
-          <text x="164" y="60" class="t-sub">агент на muthur</text>
-          <rect x="345" y="20" width="175" height="52" rx="6" class="box" />
-          <text x="359" y="42" class="t-name">Claude Desktop</text>
-          <text x="359" y="60" class="t-sub">любой MCP-клиент</text>
-          <rect x="560" y="20" width="140" height="52" rx="6" class="box" />
-          <text x="574" y="42" class="t-name">curl</text>
-          <text x="574" y="60" class="t-sub">вы сами, проверить</text>
+          <rect x="150" y="20" width="250" height="52" rx="6" class="box" />
+          <text x="164" y="42" class="t-name">Ты в терминале</text>
+          <text x="164" y="60" class="t-sub">пульт: on, &gt;, pt Ok Computer…</text>
+          <rect x="420" y="20" width="280" height="52" rx="6" class="todo-box" />
+          <text x="434" y="42" class="t-name todo">Hermes, Claude Desktop</text>
+          <text x="434" y="60" class="t-sub">любой MCP-клиент · этап 35</text>
 
-          <line x1="237" y1="72" x2="237" y2="117" class="edge" marker-end="url(#ah)" />
-          <line x1="432" y1="72" x2="432" y2="117" class="edge" marker-end="url(#ah)" />
-          <text x="334" y="99" class="t-edge" text-anchor="middle">MCP · HTTP, не stdio</text>
-          <line x1="630" y1="72" x2="630" y2="117" class="edge" marker-end="url(#ah)" />
-          <text x="638" y="99" class="t-edge">HTTP</text>
+          <line x1="275" y1="72" x2="275" y2="117" class="edge" marker-end="url(#ah)" />
+          <text x="283" y="99" class="t-edge">строка</text>
+          <line x1="560" y1="72" x2="560" y2="117" class="edge dash" marker-end="url(#ah)" />
+          <text x="568" y="99" class="t-edge">MCP · HTTP</text>
 
           <!-- часть 6 -->
-          <rect x="150" y="120" width="390" height="56" rx="6" class="box" />
-          <text x="164" y="142" class="t-mod">Heos.Mcp</text>
-          <text x="164" y="161" class="t-sub">5 инструментов: status, play_music, volume…</text>
-          <rect x="560" y="120" width="140" height="56" rx="6" class="box" />
-          <text x="574" y="142" class="t-mod">Heos.Http</text>
-          <text x="574" y="161" class="t-sub">/health · жив ли heartbeat</text>
+          <rect x="150" y="120" width="250" height="56" rx="6" class="box" />
+          <text x="164" y="142" class="t-mod">app/Remote</text>
+          <text x="164" y="161" class="t-sub">строка → сценарий · печатает ошибки</text>
+          <rect x="420" y="120" width="280" height="56" rx="6" class="todo-box" />
+          <text x="434" y="142" class="t-mod todo">Heos.Mcp · Service · Http</text>
+          <text x="434" y="161" class="t-sub">заготовки: инструменты и сценарии</text>
 
-          <line x1="345" y1="176" x2="345" y2="217" class="edge" marker-end="url(#ah)" />
-          <line x1="630" y1="176" x2="630" y2="217" class="edge" marker-end="url(#ah)" />
-          <text x="353" y="202" class="t-edge">вызывает</text>
+          <!-- настройки и лог -->
+          <rect x="730" y="128" width="250" height="48" rx="6" class="box" />
+          <text x="744" y="148" class="t-mod">app/Settings</text>
+          <text x="744" y="166" class="t-sub">config.yaml → DeviceParams</text>
+          <line x1="855" y1="176" x2="855" y2="217" class="edge" marker-end="url(#ah)" />
+          <text x="863" y="202" class="t-edge">создаёт</text>
+          <polyline points="730,160 715,160 715,250 703,250" class="edge" marker-end="url(#ah)" />
+          <text x="710" y="205" class="t-edge" text-anchor="end">DeviceParams</text>
 
-          <!-- часть 5 -->
-          <rect x="150" y="220" width="550" height="56" rx="6" class="box" />
-          <text x="164" y="242" class="t-mod">Heos.Service</text>
-          <text x="164" y="261" class="t-sub">сценарии: найти и поставить · что играет · громкость</text>
+          <rect x="730" y="220" width="250" height="72" rx="6" class="box" />
+          <text x="744" y="242" class="t-mod">Heos.Logger</text>
+          <text x="744" y="261" class="t-sub">едет в параметрах каждого слоя</text>
+          <text x="744" y="279" class="t-sub">Debug команды, Info связь, Warn сбои</text>
 
-          <line x1="425" y1="276" x2="425" y2="317" class="edge" marker-end="url(#ah)" />
-          <text x="433" y="302" class="t-edge">только через эффект</text>
+          <line x1="275" y1="176" x2="275" y2="217" class="edge" marker-end="url(#ah)" />
+          <text x="283" y="202" class="t-edge">getDevice перед каждой командой</text>
+          <line x1="560" y1="176" x2="560" y2="217" class="edge dash" marker-end="url(#ah)" />
 
-          <!-- часть 4: эффект -->
-          <rect x="150" y="320" width="550" height="56" rx="6" class="box" />
-          <text x="164" y="342" class="t-mod">Heos.Effect · эффект Heos (+ Power)</text>
-          <text x="164" y="361" class="t-sub">около десяти операций: GetPlayers, Search, SetPlayState, SetVolume… · Power: PWON, PWSTANDBY</text>
+          <!-- супервизор -->
+          <rect x="150" y="220" width="550" height="72" rx="6" class="box" />
+          <text x="164" y="242" class="t-mod">Heos.Device · withSupervised</text>
+          <text x="164" y="261" class="t-sub">race: супервизор крутит withDevice | сервер</text>
+          <text x="164" y="279" class="t-sub">getDevice ждёт Up до 5 с, иначе Unavailable</text>
+          <rect x="580" y="232" width="108" height="48" rx="5" class="box" />
+          <text x="592" y="252" class="t-name">ячейка</text>
+          <text x="592" y="270" class="t-sub">Down | Up dev</text>
 
-          <line x1="315" y1="376" x2="315" y2="417" class="edge" marker-end="url(#ah)" />
-          <text x="323" y="402" class="t-edge">в работе</text>
-          <line x1="610" y1="376" x2="610" y2="417" class="edge dash" marker-end="url(#ah)" />
-          <text x="618" y="402" class="t-edge">в тестах</text>
+          <line x1="275" y1="292" x2="275" y2="327" class="edge" marker-end="url(#ah)" />
+          <text x="283" y="314" class="t-edge">Device → обработчики</text>
+          <line x1="615" y1="292" x2="615" y2="327" class="edge" marker-end="url(#ah)" />
 
-          <!-- часть 4: обработчики -->
-          <rect x="150" y="420" width="330" height="56" rx="6" class="box" />
-          <text x="164" y="442" class="t-mod">Handler.Live</text>
-          <text x="164" y="461" class="t-sub">операция → Command → sendCommand</text>
-          <rect x="520" y="420" width="180" height="56" rx="6" class="box" />
-          <text x="534" y="442" class="t-mod">Handler.Fake</text>
-          <text x="534" y="461" class="t-sub">без сети и усилителя</text>
+          <!-- эффекты -->
+          <rect x="150" y="330" width="360" height="56" rx="6" class="box" />
+          <text x="164" y="352" class="t-mod">Heos.Effect.Heos</text>
+          <text x="496" y="352" class="t-sub" text-anchor="end">уйдут на 34b</text>
+          <text x="164" y="371" class="t-sub">17 операций: поиск, очередь, громкость…</text>
+          <rect x="530" y="330" width="170" height="56" rx="6" class="box" />
+          <text x="544" y="352" class="t-mod">Heos.Effect.Avr</text>
+          <text x="544" y="371" class="t-sub">getPower, setPower</text>
 
-          <line x1="610" y1="476" x2="610" y2="517" class="edge dash" marker-end="url(#ah)" />
-          <text x="618" y="502" class="t-edge">читает</text>
-          <rect x="520" y="520" width="180" height="52" rx="6" class="box" />
-          <text x="534" y="542" class="t-mod">test/fixtures</text>
-          <text x="534" y="560" class="t-sub">записанные ответы</text>
+          <line x1="257" y1="386" x2="257" y2="427" class="edge" marker-end="url(#ah)" />
+          <text x="265" y="412" class="t-edge">в работе</text>
+          <line x1="452" y1="386" x2="452" y2="427" class="edge dash" marker-end="url(#ah)" />
+          <text x="460" y="412" class="t-edge">в тестах</text>
+          <line x1="620" y1="386" x2="620" y2="427" class="edge" marker-end="url(#ah)" />
 
-          <!-- части 2–3: соединение -->
-          <rect x="150" y="520" width="330" height="250" rx="8" class="group-io" />
-          <text x="315" y="543" class="t-mod" text-anchor="middle">Heos.Connection</text>
-          <text x="315" y="560" class="t-sub" text-anchor="middle">IO · потоки async · withConnection</text>
+          <!-- обработчики -->
+          <rect x="150" y="430" width="215" height="66" rx="6" class="box" />
+          <text x="164" y="452" class="t-mod">Handler.Live</text>
+          <text x="164" y="470" class="t-sub">чтение — из кэша</text>
+          <text x="164" y="486" class="t-sub">запись — sendCommand</text>
+          <rect x="380" y="430" width="145" height="66" rx="6" class="box" />
+          <text x="394" y="452" class="t-mod">Handler.Fake</text>
+          <text x="394" y="470" class="t-sub">в памяти, без сети</text>
+          <text x="394" y="486" class="t-sub">+ AvrFake</text>
+          <rect x="535" y="430" width="165" height="66" rx="6" class="box" />
+          <text x="549" y="452" class="t-mod">Handler.AvrLive</text>
+          <text x="549" y="470" class="t-sub">Just — телнет</text>
+          <text x="549" y="486" class="t-sub">Nothing — ошибка</text>
 
-          <line x1="237" y1="476" x2="237" y2="572" class="edge" marker-end="url(#ah)" />
-          <text x="245" y="502" class="t-edge">sendCommand</text>
-          <line x1="392" y1="575" x2="392" y2="479" class="edge" marker-end="url(#ah)" />
-          <text x="400" y="502" class="t-edge">Either ошибка ответ</text>
+          <line x1="257" y1="496" x2="257" y2="537" class="edge" marker-end="url(#ah)" />
+          <text x="265" y="522" class="t-edge">кэш и линия из Device</text>
 
-          <rect x="165" y="575" width="145" height="50" rx="5" class="box" />
-          <text x="179" y="596" class="t-name">sendCommand</text>
-          <text x="179" y="613" class="t-sub">замок · SEQUENCE</text>
-          <rect x="320" y="575" width="145" height="50" rx="5" class="box" />
-          <text x="334" y="596" class="t-name">reader</text>
-          <text x="334" y="613" class="t-sub">режет и сортирует</text>
-          <rect x="165" y="645" width="145" height="50" rx="5" class="box" />
-          <text x="179" y="666" class="t-name">heartbeat</text>
-          <text x="179" y="683" class="t-sub">withReconnect снаружи</text>
-          <rect x="320" y="645" width="145" height="50" rx="5" class="box" />
-          <text x="334" y="666" class="t-name">subscribe</text>
-          <text x="334" y="683" class="t-sub">TChan HeosEvent → кэш</text>
-          <line x1="440" y1="625" x2="440" y2="643" class="edge" marker-end="url(#ah)" />
-          <text x="400" y="639" class="t-edge" text-anchor="end">события</text>
+          <!-- одна связь -->
+          <rect x="150" y="540" width="380" height="175" rx="8" class="group-io" />
+          <text x="164" y="563" class="t-mod">Heos.Device</text>
+          <text x="164" y="580" class="t-sub">одна связь: от подключения до обрыва</text>
+          <rect x="165" y="595" width="170" height="50" rx="5" class="box" />
+          <text x="179" y="616" class="t-name">reconnecting</text>
+          <text x="179" y="633" class="t-sub">повтор с backoff</text>
+          <rect x="350" y="595" width="170" height="50" rx="5" class="box" />
+          <text x="364" y="616" class="t-name">initialize</text>
+          <text x="364" y="633" class="t-sub">Catalogue + LiveState</text>
+          <rect x="165" y="655" width="170" height="50" rx="5" class="box" />
+          <text x="179" y="676" class="t-name">findAddr</text>
+          <text x="179" y="693" class="t-sub">конфиг или Discovery</text>
+          <rect x="350" y="655" width="170" height="50" rx="5" class="box" />
+          <text x="364" y="676" class="t-name">tracker</text>
+          <text x="364" y="693" class="t-sub">события → кэш</text>
 
-          <text x="165" y="724" class="t-sub">pending — выбросить · событие — подписчикам</text>
-          <text x="165" y="742" class="t-sub">ответ — в коробочку по SEQUENCE</text>
+          <line x1="250" y1="715" x2="250" y2="747" class="edge" marker-end="url(#ah)" />
+          <text x="258" y="738" class="t-edge">команды</text>
+          <line x1="470" y1="750" x2="470" y2="718" class="edge" marker-end="url(#ah)" />
+          <text x="478" y="738" class="t-edge">события</text>
+          <line x1="620" y1="496" x2="620" y2="802" class="edge" marker-end="url(#ah)" />
+          <text x="628" y="620" class="t-edge">dev.avr</text>
 
-          <!-- поиск и конфиг -->
-          <rect x="520" y="600" width="180" height="52" rx="6" class="box" />
-          <text x="534" y="622" class="t-mod">Heos.Discovery</text>
-          <text x="534" y="640" class="t-sub">SSDP, без mDNS</text>
-          <rect x="520" y="678" width="180" height="52" rx="6" class="box" />
-          <text x="534" y="700" class="t-mod">Heos.Config</text>
-          <text x="534" y="718" class="t-sub">адрес?, логин, порт</text>
-          <line x1="610" y1="678" x2="610" y2="655" class="edge" marker-end="url(#ah)" />
-          <text x="618" y="670" class="t-edge">нет адреса</text>
-          <line x1="520" y1="630" x2="483" y2="630" class="edge" marker-end="url(#ah)" />
-          <text x="501" y="622" class="t-edge" text-anchor="middle">адрес</text>
+          <!-- сеть -->
+          <rect x="150" y="750" width="380" height="180" rx="8" class="group-io" />
+          <text x="164" y="773" class="t-mod">Heos.Connection.Heos</text>
+          <text x="164" y="790" class="t-sub">withConnection · два сокета на 1255</text>
+          <rect x="165" y="805" width="170" height="50" rx="5" class="box" />
+          <text x="179" y="826" class="t-name">sendCommand</text>
+          <text x="179" y="843" class="t-sub">замок · SEQUENCE</text>
+          <rect x="350" y="805" width="170" height="50" rx="5" class="box" />
+          <text x="364" y="826" class="t-name">subscribe</text>
+          <text x="364" y="843" class="t-sub">TChan событий</text>
+          <rect x="165" y="865" width="170" height="50" rx="5" class="box" />
+          <text x="179" y="886" class="t-name">heartbeat ×2</text>
+          <text x="179" y="903" class="t-sub">раз в 30 с на сокет</text>
+          <rect x="350" y="865" width="170" height="50" rx="5" class="box" />
+          <text x="364" y="886" class="t-name">reader ×2</text>
+          <text x="364" y="903" class="t-sub">режет и раскладывает</text>
+
+          <rect x="545" y="805" width="155" height="50" rx="5" class="box" />
+          <text x="559" y="826" class="t-mod">Connection.Avr</text>
+          <text x="559" y="843" class="t-sub">телнет · замок</text>
+
+          <line x1="530" y1="775" x2="727" y2="775" class="edge pure" marker-end="url(#ahp)" />
+          <text x="630" y="768" class="t-edge-pure">строки ⇄ типы</text>
 
           <!-- протокол: часть 1 -->
-          <rect x="730" y="420" width="250" height="350" rx="8" class="pure-group" />
-          <text x="744" y="444" class="t-pure-h">Протокол</text>
-          <text x="744" y="461" class="t-sub">часть 1 · чистый код, без IO</text>
+          <rect x="730" y="430" width="250" height="400" rx="8" class="pure-group" />
+          <text x="744" y="454" class="t-pure-h">Протокол</text>
+          <text x="744" y="471" class="t-sub">часть 1 · чистый код, без IO</text>
 
-          <rect x="744" y="476" width="222" height="58" rx="5" class="pure-box" />
-          <text x="758" y="498" class="t-mod">Heos.Url</text>
-          <text x="952" y="498" class="t-chip" text-anchor="end">готово</text>
-          <text x="758" y="516" class="t-sub">кодирует %26 %3D %25</text>
+          <rect x="744" y="486" width="222" height="58" rx="5" class="pure-box" />
+          <text x="758" y="508" class="t-mod">Heos.Url</text>
+          <text x="758" y="526" class="t-sub">%26 %3D %25 в обе стороны</text>
 
-          <rect x="744" y="544" width="222" height="58" rx="5" class="pure-box" />
-          <text x="758" y="566" class="t-mod">Heos.Envelope</text>
-          <text x="952" y="566" class="t-chip" text-anchor="end">готово</text>
-          <text x="758" y="584" class="t-sub">JSON-конверт и classify</text>
+          <rect x="744" y="554" width="222" height="58" rx="5" class="pure-box" />
+          <text x="758" y="576" class="t-mod">Heos.Envelope</text>
+          <text x="758" y="594" class="t-sub">Heos: JSON-конверт · Avr: строка</text>
 
-          <rect x="744" y="612" width="222" height="58" rx="5" class="pure-box" />
-          <text x="758" y="634" class="t-mod">Heos.Command</text>
-          <text x="952" y="634" class="t-chip" text-anchor="end">готово</text>
-          <text x="758" y="652" class="t-sub">команда → строка</text>
+          <rect x="744" y="622" width="222" height="58" rx="5" class="pure-box" />
+          <text x="758" y="644" class="t-mod">Heos.Command</text>
+          <text x="758" y="662" class="t-sub">Heos: вся спецификация · Avr: PW</text>
 
-          <rect x="744" y="680" width="222" height="58" rx="5" class="pure-box" />
-          <text x="758" y="702" class="t-mod">Player · Media</text>
-          <text x="952" y="702" class="t-chip todo" text-anchor="end">в работе</text>
-          <text x="758" y="720" class="t-sub">PlayerId, SourceId…</text>
+          <rect x="744" y="690" width="222" height="58" rx="5" class="pure-box" />
+          <text x="758" y="712" class="t-mod">Connection.Framing</text>
+          <text x="758" y="730" class="t-sub">строки из потока байтов</text>
 
-          <line x1="480" y1="755" x2="727" y2="755" class="edge pure" marker-end="url(#ahp)" />
-          <text x="604" y="749" class="t-edge-pure" text-anchor="middle">строки ⇄ типы</text>
+          <rect x="744" y="758" width="222" height="58" rx="5" class="pure-box" />
+          <text x="758" y="780" class="t-mod">Heos.Types</text>
+          <text x="758" y="798" class="t-sub">Player, Track, SourceId…</text>
 
           <!-- провода к усилителю -->
-          <line x1="247" y1="772" x2="247" y2="839" class="edge" marker-start="url(#ah)" marker-end="url(#ah)" />
-          <text x="255" y="818" class="t-edge">сокет 1: команды ⇄ ответы</text>
-          <line x1="427" y1="839" x2="427" y2="773" class="edge" marker-end="url(#ah)" />
-          <text x="435" y="818" class="t-edge">сокет 2: события</text>
-          <polyline points="470,770 470,790 605,790 605,839" class="edge" marker-end="url(#ah)" />
-          <text x="613" y="818" class="t-edge">Power, мимо Connection</text>
+          <line x1="247" y1="933" x2="247" y2="967" class="edge" marker-start="url(#ah)" marker-end="url(#ah)" />
+          <text x="255" y="958" class="t-edge">команды ⇄ ответы</text>
+          <line x1="427" y1="933" x2="427" y2="967" class="edge" marker-start="url(#ah)" marker-end="url(#ah)" />
+          <text x="435" y="958" class="t-edge">события, heartbeat</text>
+          <line x1="620" y1="858" x2="620" y2="967" class="edge" marker-start="url(#ah)" marker-end="url(#ah)" />
+          <text x="628" y="958" class="t-edge">порт 23</text>
 
-          <!-- устройство -->
-          <rect x="150" y="842" width="550" height="96" rx="8" class="box" />
-          <rect x="165" y="854" width="165" height="46" rx="5" class="box" />
-          <text x="179" y="873" class="t-mod">1255 · команды</text>
-          <text x="179" y="890" class="t-sub">и ответы на них</text>
-          <rect x="345" y="854" width="165" height="46" rx="5" class="box" />
-          <text x="359" y="873" class="t-mod">1255 · события</text>
-          <text x="359" y="890" class="t-sub">громкость, трек, пауза</text>
-          <rect x="525" y="854" width="160" height="46" rx="5" class="box" />
-          <text x="539" y="873" class="t-mod">23 · питание</text>
-          <text x="539" y="890" class="t-sub">PWON, PWSTANDBY</text>
-          <text x="165" y="925" class="t-name">Marantz MODEL 60n</text>
-          <text x="686" y="925" class="t-sub" text-anchor="end">в домашней сети, по Wi-Fi</text>
+          <!-- аппарат -->
+          <rect x="150" y="970" width="550" height="96" rx="8" class="box" />
+          <rect x="165" y="982" width="165" height="46" rx="5" class="box" />
+          <text x="179" y="1001" class="t-mod">1255 · команды</text>
+          <text x="179" y="1018" class="t-sub">и ответы на них</text>
+          <rect x="345" y="982" width="165" height="46" rx="5" class="box" />
+          <text x="359" y="1001" class="t-mod">1255 · события</text>
+          <text x="359" y="1018" class="t-sub">громкость, трек, пауза</text>
+          <rect x="525" y="982" width="160" height="46" rx="5" class="box" />
+          <text x="539" y="1001" class="t-mod">23 · питание</text>
+          <text x="539" y="1018" class="t-sub">PWON, PWSTANDBY</text>
+          <text x="165" y="1053" class="t-name">Marantz MODEL 60n</text>
+          <text x="686" y="1053" class="t-sub" text-anchor="end">в домашней сети, по Wi-Fi</text>
         </svg>
       </div>
-      <figcaption>Просьба агента идёт сверху вниз. Бирюзовое — чистый код без IO: он уже почти написан и проверяется без
-        сети. Пунктир — путь в тестах: сценарии не замечают, что под ними вместо усилителя записанные ответы.
-      </figcaption>
+      <figcaption>Команда идёт сверху вниз. Сервер (сейчас пульт, потом MCP) запускается один раз и живёт всю
+        программу. Связь с усилителем — сменная деталь: её держит супервизор, а сервер видит её только через
+        <code>getDevice</code>. Бирюзовое — чистый код без IO, проверяется без сети. Пунктир — путь в тестах: сценарии не
+        замечают, что под ними вместо усилителя память.</figcaption>
     </figure>
 
-    <h2>Путь одной просьбы</h2>
+    <h2>Путь одной команды</h2>
     <ol class="trace">
-      <li><span>Hermes вызывает инструмент <code>heos_play_music</code> с запросом «Ok Computer».</span></li>
-      <li><span><code>Heos.Mcp</code> передаёт его в <code>Heos.Service</code>, в сценарий «найти и поставить».</span>
-      </li>
-      <li><span>Сценарий через эффект Heos просит <code>Search</code>, выбирает лучшее совпадение и просит
-          <code>PlayItem</code>.</span></li>
-      <li><span><code>Handler.Live</code> превращает операцию в <code>Command</code> и вызывает <code>sendCommand</code>.</span></li>
-      <li><span><code>sendCommand</code> берёт следующий номер, кладёт коробочку в карту ожидающих и под замком отправляет строку в сокет команд:
+      <li><span>Ты набираешь в пульте <code>pt Ok Computer</code>.</span></li>
+      <li><span>Пульт вызывает <code>getDevice</code>. В ячейке <code>Up dev</code>, и устройство приходит сразу. Если
+          там <code>Down</code>, пульт ждёт до 5 секунд, а не дождавшись, получает <code>Unavailable</code> и печатает
+          «No connection to the amplifier…».</span></li>
+      <li><span><code>runEff . runHeosLive dev . runAvrLive dev.avr</code> запускает сценарий: <code>getSearchable</code>
+          берёт из каталога источники с поиском по трекам, <code>search</code> ищет в первом.</span></li>
+      <li><span><code>Handler.Live</code> находит в каталоге критерий поиска, превращает операцию в
+          <code>Command</code> <code>Search</code> и вызывает <code>sendCommand</code>.</span></li>
+      <li><span><code>sendCommand</code> берёт следующий номер, кладёт коробочку в карту ожидающих и под замком
+          отправляет строку в сокет команд:
           <code class="wire">heos://browse/search?sid=10&amp;search=Ok Computer&amp;scid=3&amp;SEQUENCE=7</code></span>
       </li>
-      <li><span><code>reader</code> режет поток на строки. Первым приходит pending с флагом «command under process», его
-          выбрасывают. Следом настоящий ответ с <code>SEQUENCE=7</code>, он попадает в коробочку номер 7, и <code>sendCommand</code> возвращает его. Нет ответа за 5 секунд — <code>Left Timeout</code>.</span></li>
-      <li><span>Агент получает короткий ответ: что включилось. Сырой JSON усилителя наружу не уходит.</span></li>
+      <li><span><code>reader</code> режет поток на строки. Pending с «command under process» выбрасывает, ответ с
+          <code>SEQUENCE=7</code> кладёт в коробочку номер 7, и <code>sendCommand</code> возвращает его. Нет ответа за 5
+          секунд — <code>NoReply</code>.</span></li>
+      <li><span>Пульт печатает находку и вызывает <code>playItem</code>: <code>AddTrackToQueue</code> идёт тем же путём.
+          На уровне Debug каждая команда оставляет в логе строку с временем выполнения.</span></li>
     </ol>
 
-    <h2>Две границы</h2>
+    <h2>Когда связь рвётся</h2>
+    <ol class="trace">
+      <li><span>Усилитель закрыл соединение, и <code>reader</code> видит пустое чтение (<code>ConnectionLost</code>). Или
+          Wi-Fi пропал, сокет молчит, и ближайший heartbeat не дожидается ответа. В любом случае фоновый поток падает, и
+          <code>withConnection</code> отменяет всё, что работало на этой связи.</span></li>
+      <li><span>В <code>deviceInit</code> срабатывает <code>finally</code>: в логе «Disconnected from …». Следом
+          <code>finally</code> супервизора кладёт в ячейку <code>Down</code>. Телнет закрывается вместе с HEOS.</span>
+      </li>
+      <li><span><code>reconnecting</code> пишет «Link dropped: …» и начинает новый круг с первой задержки: ищет адрес,
+          подключается, при неудаче пишет «Reconnect: …» и ждёт по backoff: 1 с, 2 с, 4 с… до минуты.</span></li>
+      <li><span>Пока в ячейке <code>Down</code>, пульт на каждую команду ждёт до 5 секунд и печатает, что связи нет. Сам
+          пульт не перезапускается.</span></li>
+      <li><span>Подключились: start-up заново (вход в аккаунт, каталог, снимок состояния, подписка на события), в логе
+          «Connected to …», в ячейке <code>Up</code> с новым <code>Device</code>. Следующая команда пульта уходит уже по
+          нему.</span></li>
+      <li><span>Если порт 23 отказал, <code>withAvr</code> пишет «AVR: cannot connect to …» и отдаёт
+          <code>Nothing</code>. HEOS работает, а команды питания отвечают <code>AvrUnavailable</code>.</span></li>
+    </ol>
+
+    <h2>Кто работает одновременно</h2>
+    <ul class="plain">
+      <li><strong>Сервер</strong> — пульт: читает строки и выполняет команды.</li>
+      <li><strong>Супервизор</strong>: пока связь жива, спит; при обрыве переподключается.</li>
+      <li><strong>tracker</strong>: ждёт события и обновляет кэш: громкость и состояние берёт прямо из события, за треком
+        идёт командой <code>GetNowPlayingMedia</code>.</li>
+      <li><strong>reader</strong> и <strong>heartbeat</strong>, по паре на каждый из двух сокетов. Упал любой — упала
+        вся связь.</li>
+    </ul>
+
+    <h2>Три границы</h2>
     <div class="bounds">
       <div class="bound pure">
         <h3>Протокол без IO</h3>
@@ -557,11 +633,23 @@
           фикстурах за доли секунды.</p>
       </div>
       <div class="bound">
-        <h3>Эффект Heos</h3>
-        <p>Сценарии не знают, что под ними: живой усилитель или записанные ответы. Сюда же встанет второй плеер, если он
-          когда-нибудь появится.</p>
+        <h3>Ячейка</h3>
+        <p>Сервер и связь знают друг о друге только через <code>getDevice</code>. Связь рвётся и поднимается сама, сервер
+          этого не замечает, кроме коротких «недоступно».</p>
+      </div>
+      <div class="bound">
+        <h3>Эффекты</h3>
+        <p>Сценарии не знают, что под ними: живой усилитель или память. На этапе 34b эффекты заменит обычная функция в
+          <code>ReaderT Env IO</code>.</p>
       </div>
     </div>
+
+    <h2>Что ещё не написано</h2>
+    <ul class="plain">
+      <li>Свой <code>reader</code> для телнета. Сейчас обрыв порта 23 посреди работы переподключает обе линии.</li>
+      <li>Этап 34b: <code>ReaderT Env IO</code> вместо эффектов.</li>
+      <li>Этап 35: MCP по HTTP, сервер над тем же <code>getDevice</code>.</li>
+    </ul>
   </div>
 
 </body>
