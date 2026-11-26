@@ -46,7 +46,7 @@ import Text.Read (readMaybe)
 
 data Device = Device
   { heos :: HeosConnection
-  , avr :: AvrConnection
+  , avr :: Maybe AvrConnection
   , catalogue :: Catalogue
   , state :: TVar LiveState
   }
@@ -115,6 +115,7 @@ withDevice params = reconnecting params findAddr
       n -> logAt Warn $ "Found " <> show n <> " HEOS devices, taking " <> show addr
 
 type ShouldRetry e = (Exception e) => e -> IO Bool
+
 reconnecting :: DeviceParams -> IO HostAddress -> (Device -> IO a) -> IO a
 reconnecting params findAddr act = go
  where

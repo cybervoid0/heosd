@@ -45,6 +45,10 @@ instance Exception CommandError where
   displayException (Unreadable msg) = "Heos device sent an unreadable reply: " <> T.unpack msg
   displayException NoReply = "Heos device did not answer in time"
 
-data AvrError = AvrNoReply deriving (Show, Eq)
+data AvrError
+  = AvrNoReply
+  | AvrUnavailable
+  deriving (Show, Eq)
 instance Exception AvrError where
   displayException AvrNoReply = "Heos device did not answer via AVR in time"
+  displayException AvrUnavailable = "Heos device is not reachable over AVR"

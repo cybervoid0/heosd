@@ -1,14 +1,15 @@
 module Heos.Connection.Avr where
 
 import Control.Concurrent (MVar, newMVar, withMVar)
-import Control.Exception (Exception (displayException), IOException, catch, handle, throwIO)
+import Control.Exception (Exception (displayException), IOException, handle, throwIO, try)
+import Control.Monad ((>=>))
 import Control.Monad.Catch (bracket, bracketOnError)
 import Data.ByteString.Char8 qualified as B
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Envelope.Avr (AvrResponse (..), decodeAvrLine)
 import Heos.Error (AvrError (..), ConnectionError (ConnectionLost))
-import Heos.Time (Seconds, toMicros)
 import Heos.Logger (Logger (..), Severity (Warn), logged)
+import Heos.Time (Seconds, toMicros)
 import Network.Socket (Family (AF_INET), HostAddress, PortNumber, SockAddr (..), SocketType (Stream), socketToHandle)
 import Network.Socket qualified as S
 import System.IO (Handle, IOMode (ReadWriteMode), hClose, hFlush, hGetChar, hSetBinaryMode)
@@ -26,20 +27,26 @@ data AvrConnection = AvrConnection
   , params :: AvrConnectionParams
   }
 
-withAvr :: AvrConnectionParams -> HostAddress -> (AvrConnection -> IO a) -> IO a
-withAvr params addr act = bracket open hClose $ \h -> do
-  hBox <- newMVar h
-  act (AvrConnection hBox params)
+withAvr :: AvrConnectionParams -> HostAddress -> (Maybe AvrConnection -> IO a) -> IO a
+withAvr params addr act = bracket open (mapM_ hClose) (traverse toConnection >=> act)
  where
-  open = bracketOnError (S.socket AF_INET Stream S.defaultProtocol) S.close $ \s -> do
-    connectOrLost s
-    h <- socketToHandle s ReadWriteMode
-    hSetBinaryMode h True
-    pure h
+  toConnection h = do
+    lock <- newMVar h
+    pure $ AvrConnection{lock, params}
+
+  open = bracketOnError (S.socket AF_INET Stream S.defaultProtocol) S.close $ \s ->
+    (try @IOException $ S.connect s sockAddr) >>= \case
+      Left e -> do
+        logAvrError e
+        S.close s
+        pure Nothing
+      Right () -> do
+        h <- socketToHandle s ReadWriteMode
+        hSetBinaryMode h True
+        pure $ Just h
+
   sockAddr = SockAddrInet params.port addr
-  connectOrLost s = S.connect s sockAddr `catch` \(e :: IOException) -> do
-    params.logger.logAt Warn $ "AVR: cannot connect to " <> show sockAddr <> ": " <> displayException e
-    throwIO ConnectionLost
+  logAvrError e = params.logger.logAt Warn $ "AVR: cannot connect to " <> show sockAddr <> ": " <> displayException e
 
 sendAvrCommand :: AvrConnection -> AvrCommand a -> IO a
 sendAvrCommand conn cmd = handle (\(_ :: IOException) -> throwIO ConnectionLost) $ withMVar conn.lock $ \h ->

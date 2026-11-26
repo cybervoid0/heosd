@@ -4,7 +4,6 @@
 --   value. Nothing here is about sockets; that is ConnectionSpec's job.
 module Heos.LiveSpec (spec) where
 
-import Control.Concurrent (newEmptyMVar)
 import Control.Concurrent.Async (withAsync)
 import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception (bracket)
@@ -16,7 +15,6 @@ import Data.ByteString.Char8 qualified as BC
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Effectful (Eff, IOE, runEff)
-import Heos.Connection.Avr (AvrConnection (..), AvrConnectionParams (..))
 import Heos.Connection.Heos (runConnection)
 import Heos.Connection.Types (ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..))
 import Heos.Device (Catalogue (..), Device (..), LiveState (..))
@@ -33,9 +31,6 @@ import Test.Hspec
 
 heosParams :: HeosConnectionParams
 heosParams = HeosConnectionParams{commandTimeout = Seconds 1, heartbeatDelay = Seconds 3600, maxLineLength = 64 * 1024, port = 1255, retryPolicy = constantDelay 10000, account = Nothing, address = Nothing, logger = mempty}
-
-avrParams :: AvrConnectionParams
-avrParams = AvrConnectionParams{port = 23, requestTimeout = Seconds 1, logger = mempty}
 
 -- The payload of a recorded reply, decoded.
 recorded :: (FromJSON a) => FilePath -> IO a
@@ -60,7 +55,7 @@ cached = LiveState{nowPlaying = Nothing, volume = 15, playState = Play}
 
 -- Run a program against the Live handler over a device whose HEOS
 -- connection goes to a fake answering with `reply`. The AVR side is never
--- touched by this handler, so it is an empty cell. Returns the result and
+-- touched by this handler, so there is none. Returns the result and
 -- the commands the device saw on the commands socket, in order.
 withLive :: (ByteString -> ByteString) -> Eff '[Heos, IOE] a -> IO (a, [ByteString])
 withLive reply prog =
@@ -69,7 +64,6 @@ withLive reply prog =
       seen <- newTVarIO []
       catalogue <- catalogueOf
       state <- newTVarIO cached
-      avr <- (`AvrConnection` avrParams) <$> newEmptyMVar
       let record line = atomically (modifyTVar' seen (line :))
       withAsync (answering (const (pure ())) devEvents) $ \_ ->
         withAsync (answeringWith reply record devCommands) $ \_ -> do
@@ -77,7 +71,7 @@ withLive reply prog =
           let sockets = ConnectionSockets (tupleToHostAddress (127, 0, 0, 1)) ourEvents ourCommands
           result <- runConnection heosParams sockets $ \props -> do
             let heos = HeosConnection{pid = PlayerId 1, sockets, props}
-            runEff (runHeosLive Device{heos, avr, catalogue, state} prog)
+            runEff (runHeosLive Device{heos, avr = Nothing, catalogue, state} prog)
           commands <- reverse <$> readTVarIO seen
           pure (result, commands)
  where

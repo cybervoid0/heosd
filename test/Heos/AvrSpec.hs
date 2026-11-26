@@ -8,6 +8,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.List (isInfixOf)
+import Data.Maybe (isJust)
 import Effectful (runEff)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
 import Heos.Connection.Avr (AvrConnection, AvrConnectionParams (..), answerOf, sendAvrCommand, withAvr)
@@ -115,7 +116,7 @@ withAmpLoggingTo spy script act = bracket (socket AF_INET Stream defaultProtocol
   port <- portOf <$> getSocketName srv
   seen <- newTVarIO []
   withAsync (bracket (fst <$> accept srv) close (script seen)) $ \amp -> do
-    result <- withAvr (paramsFor port){logger = spy} loopback act
+    result <- withAvr (paramsFor port){logger = spy} loopback (maybe (fail "the telnet line did not open") act)
     wait amp
     sent <- reverse <$> readTVarIO seen
     pure (result, sent)
@@ -233,13 +234,14 @@ spec = do
       [msg | (sev, msg) <- entries, sev < Warn] `shouldBe` []
 
     -- The telnet port can be closed while HEOS works: network control
-    -- switched off in the amplifier's settings. The complaint names the
-    -- address that refused, and the error stays the one reconnecting acts on.
-    it "complains, with the address, when the telnet port is closed" $ do
+    -- switched off in the amplifier's settings. That is no reason to fail:
+    -- the action runs without a telnet line, and the complaint names the
+    -- address that refused.
+    it "hands over no connection, and complains with the address, when the telnet port is closed" $ do
       (spy, seen) <- capturing
       port <- freePort
-      outcome <- try @ConnectionError $ withAvr (paramsFor port){logger = spy} loopback (\_ -> pure ())
-      outcome `shouldSatisfy` either lost (const False)
+      opened <- withAvr (paramsFor port){logger = spy} loopback (pure . isJust)
+      opened `shouldBe` False
       said <- complaints <$> seen
       said `shouldSatisfy` any (\msg -> "127.0.0.1" `isInfixOf` msg && show port `isInfixOf` msg)
 
@@ -248,13 +250,23 @@ spec = do
       _ <- withAmpLoggingTo spy hangUp $ \_ -> pure ()
       seen `shouldReturn` []
 
-  describe "runAvrLive" $
+  describe "runAvrLive" $ do
     it "runs getPower and setPower over the connection" $ do
       amp <- statefulAmp On
       (power, sent) <- withAmp (replyingWith amp) $ \conn ->
-        runEff . runAvrLive conn $ turnOff >> getPower
+        runEff . runAvrLive (Just conn) $ turnOff >> getPower
       power `shouldBe` Off
       sent `shouldBe` ["PWSTANDBY", "PW?"]
+
+    -- No telnet line: a power command fails with its own error, not with
+    -- AvrNoReply, which would say the amplifier was asked and kept quiet.
+    it "refuses a power command when there is no telnet line" $
+      runEff (runAvrLive Nothing getPower) `shouldThrow` (== AvrUnavailable)
+
+    -- The refusal comes with the command, not with the handler: a program
+    -- that never asks for power runs as if the line were there.
+    it "runs a program that sends no power command" $
+      runEff (runAvrLive Nothing (pure "done")) `shouldReturn` ("done" :: String)
  where
   noisy = \case
     "PW?" -> "MV45\rSITUNER\rPWON\r"

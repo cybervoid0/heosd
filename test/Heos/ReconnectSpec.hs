@@ -8,6 +8,7 @@ import Control.Monad (forever, void, when)
 import Control.Retry (constantDelay, exponentialBackoff)
 import Data.ByteString (ByteString)
 import Data.List (isInfixOf, isPrefixOf)
+import Data.Maybe (isJust)
 import GHC.Clock (getMonotonicTime)
 import Heos.Command.Heos (Command (..))
 import Heos.Command.Avr (AvrCommand (..))
@@ -292,10 +293,23 @@ reconnectingSpec = describe "reconnecting" $ do
         device <- async (serve srv >> serve srv)
         result <- bounded $ reconnecting (paramsFor port amp) (pure loopback) $ \dev -> do
           n <- start
-          when (n == 1) (void (sendAvrCommand dev.avr GetPower))
+          when (n == 1) (maybe (fail "no telnet line") (\avr -> void (sendAvrCommand avr GetPower)) dev.avr)
           pure n
         result `shouldBe` 2
         wait device
+
+  -- Stage 34a: the telnet port refuses, HEOS is fine. The link comes up
+  -- without the telnet line instead of failing as a whole: the action
+  -- runs once, on the first connection, with no amplifier in the device.
+  it "comes up without the telnet line when the telnet port is closed" $
+    withDeviceOn defaultPort $ \port srv -> do
+      amp <- freePort
+      (start, runs) <- counting
+      device <- async (serve srv)
+      telnet <- bounded $ reconnecting (paramsFor port amp) (pure loopback) $ \dev -> start >> pure (isJust dev.avr)
+      telnet `shouldBe` False
+      runs >>= (`shouldBe` 1)
+      wait device
 
   -- A device that accepts the connection but leaves a start-up query
   -- unanswered is not up yet: HEOS opens its port well before it can
