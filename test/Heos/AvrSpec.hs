@@ -1,9 +1,10 @@
 module Heos.AvrSpec (spec) where
 
+import Control.Concurrent (newEmptyMVar, putMVar, readMVar, threadDelay)
 import Control.Concurrent.Async (concurrently, wait, withAsync)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO, stateTVar, writeTVar)
 import Control.Exception (bracket, try)
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, forever, unless, void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
@@ -11,10 +12,10 @@ import Data.List (isInfixOf)
 import Data.Maybe (isJust)
 import Effectful (runEff)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
-import Heos.Connection.Avr (AvrConnection, AvrConnectionParams (..), answerOf, sendAvrCommand, withAvr)
+import Heos.Connection.Avr (AvrConnection, AvrConnectionParams (..), sendAvrCommand, withAvr)
 import Heos.Error (AvrError (..), ConnectionError (..))
 import Heos.Effect.Avr (getPower, turnOff)
-import Heos.Envelope.Avr (decodeAvrLine)
+import Heos.Envelope.Avr (AvrResponse (..), decodeAvrLine)
 import Heos.Handler.AvrLive (runAvrLive)
 import Heos.Logger (Logger, Severity (..), capturing)
 import Heos.Time (Seconds (..))
@@ -39,6 +40,7 @@ import Network.Socket (
   tupleToHostAddress,
  )
 import Network.Socket.ByteString (recv, sendAll)
+import System.Timeout (timeout)
 import Test.Hspec
 
 -- The telnet side of the amplifier: ASCII lines ending in "\r", no
@@ -53,7 +55,7 @@ loopback = tupleToHostAddress (127, 0, 0, 1)
 -- Short enough to fail a test rather than hang it; the device answers at
 -- once when it answers at all.
 paramsFor :: PortNumber -> AvrConnectionParams
-paramsFor port = AvrConnectionParams{port, requestTimeout = Seconds 0.2, logger = mempty}
+paramsFor port = AvrConnectionParams{port, requestTimeout = Seconds 0.2, maxLineLength = 1024, chunkLength = 256, logger = mempty}
 
 -- What the amplifier does with its end of the socket once the daemon has
 -- connected. Gets the log to record what the daemon sent.
@@ -133,6 +135,34 @@ freePort = bracket (socket AF_INET Stream defaultProtocol) close $ \srv -> do
     SockAddrInet port _ -> pure port
     other -> fail ("not an IPv4 address: " <> show other)
 
+-- The daemon's shape: one thread holds the line open (the supervisor's),
+-- commands come from another (the server's). Opens the line to the
+-- amplifier and holds it until it drops; meanwhile sends the command from
+-- a thread of its own. Gives back how the line ended and how the command
+-- did, each on its own: inside the action the command's error and the
+-- reader's would race out of 'withAvr', and only one would be seen.
+commandFromOutside :: Logger -> Script -> AvrCommand a -> IO (Either ConnectionError (), Either ConnectionError a)
+commandFromOutside spy script cmd = do
+  handed <- newEmptyMVar
+  withAsync (readMVar handed >>= \conn -> try @ConnectionError (sendAvrCommand conn cmd)) $ \command -> do
+    line <- try @ConnectionError . bounded $ withAmpLoggingTo spy script $ \conn ->
+      putMVar handed conn >> holdForever
+    answer <- wait command
+    pure (void line, answer)
+
+-- Keep the line until something from outside ends it.
+holdForever :: IO ()
+holdForever = forever (threadDelay maxBound)
+
+-- A reader that misses the hang-up would hold the line for good; fail the
+-- test instead of hanging the suite.
+bounded :: IO a -> IO a
+bounded io = timeout 2000000 io >>= maybe (fail "timed out after 2 s") pure
+
+-- Hold the socket until the daemon hangs up.
+holding :: Socket -> IO ()
+holding sock = void (recv sock 1024)
+
 -- What was logged at Warn or above. The tests do not tell a warning from
 -- an error; that line is the library's to draw.
 complaints :: [(Severity, String)] -> [String]
@@ -146,21 +176,16 @@ spec = do
       renderAvrCommand (SetPower On) `shouldBe` "PWON\r"
       renderAvrCommand (SetPower Off) `shouldBe` "PWSTANDBY\r"
 
-  -- AvrResponse has no Eq, so the decoded line is judged through answerOf.
-  describe "answerOf" $ do
-    it "takes the power status as the answer to PW?" $ do
-      answerOf GetPower (decodeAvrLine "PWON") `shouldBe` Just On
-      answerOf GetPower (decodeAvrLine "PWSTANDBY") `shouldBe` Just Off
+  describe "decodeAvrLine" $ do
+    it "reads the power status" $ do
+      decodeAvrLine "PWON" `shouldBe` PowerStatus On
+      decodeAvrLine "PWSTANDBY" `shouldBe` PowerStatus Off
 
-    it "takes the echoed status as the answer to a power change" $
-      answerOf (SetPower On) (decodeAvrLine "PWON") `shouldBe` Just ()
-
-    it "does not take an event for an answer" $ do
-      answerOf GetPower (decodeAvrLine "MV45") `shouldBe` Nothing
-      answerOf (SetPower Off) (decodeAvrLine "SITUNER") `shouldBe` Nothing
+    it "keeps an event it does not know as it came" $
+      decodeAvrLine "MV45" `shouldBe` AvrResponseUnknown "MV45"
 
     it "matches the whole line, not a prefix" $
-      answerOf GetPower (decodeAvrLine "PWONX") `shouldBe` Nothing
+      decodeAvrLine "PWONX" `shouldBe` AvrResponseUnknown "PWONX"
 
   describe "sendAvrCommand" $ do
     it "asks PW? and reads the power status" $ do
@@ -186,12 +211,14 @@ spec = do
       (result, _) <- withAmp (replying (const "")) $ \conn -> try (sendAvrCommand conn GetPower)
       result `shouldBe` Left AvrNoReply
 
-    -- A closed socket is a dropped link, the kind the reconnect loop
-    -- restarts both connections on. The IO error is translated here, at
-    -- the socket, so nothing above has to know about sockets.
-    it "reports a hung-up device as a lost connection" $ do
-      (result, _) <- withAmp hangUp $ \conn -> try @ConnectionError (sendAvrCommand conn GetPower)
-      result `shouldSatisfy` either lost (const False)
+    -- The answer may come in two pieces; the reader joins them.
+    it "reads an answer that arrives cut in two" $ do
+      let split _ sock = do
+            void (recv sock 1024)
+            sendAll sock "PWSTA" >> threadDelay 20000 >> sendAll sock "NDBY\r"
+            holding sock
+      (status, _) <- withAmp split $ \conn -> sendAvrCommand conn GetPower
+      status `shouldBe` Off
 
     -- One telnet client, one command at a time: the lock keeps a second
     -- command from reading the first one's answer.
@@ -224,7 +251,7 @@ spec = do
 
     it "complains about a command cut short by the device hanging up" $ do
       (spy, seen) <- capturing
-      _ <- withAmpLoggingTo spy hangUp $ \conn -> try @ConnectionError (sendAvrCommand conn GetPower)
+      _ <- commandFromOutside spy hangUpOnCommand GetPower
       complaints <$> seen >>= (`shouldSatisfy` any ("GetPower" `isInfixOf`))
 
     it "does not note a failed command as served" $ do
@@ -245,10 +272,50 @@ spec = do
       said <- complaints <$> seen
       said `shouldSatisfy` any (\msg -> "127.0.0.1" `isInfixOf` msg && show port `isInfixOf` msg)
 
+    -- The amplifier holds the line: had it hung up, the reader could see
+    -- that before the action ended, and the test would hang on a race.
     it "has nothing to say about a connection that opens and closes without a command" $ do
       (spy, seen) <- capturing
-      _ <- withAmpLoggingTo spy hangUp $ \_ -> pure ()
+      _ <- withAmpLoggingTo spy (replying (const "")) $ \_ -> pure ()
       seen `shouldReturn` []
+
+  -- Stage 34b. One thread reads the telnet socket all the time, not only
+  -- while a command waits: it cuts the stream into lines, hands them to
+  -- whoever waits, and notices the amplifier hanging up at once.
+  describe "the telnet reader" $ do
+    -- No command in flight, and the drop is still seen: withAvr ends with
+    -- the error the reconnect loop restarts on.
+    it "notices the amplifier hanging up without a command" $ do
+      result <- try @ConnectionError . bounded $ withAmp hangUp (const holdForever)
+      result `shouldSatisfy` either lost (const False)
+
+    -- The command waits in another thread. It learns of the drop at once,
+    -- as a lost connection: not AvrNoReply, which would say the amplifier
+    -- was asked and kept quiet.
+    it "fails a command waiting for its answer when the line drops" $ do
+      (line, answer) <- commandFromOutside mempty hangUpOnCommand GetPower
+      answer `shouldSatisfy` either lost (const False)
+      line `shouldSatisfy` either lost (const False)
+
+    -- A command sent from the action itself: its error and the reader's
+    -- race out of withAvr. Both say the same, so whichever wins, the
+    -- reconnect loop gets the error it restarts on.
+    it "ends with a lost connection whichever notices the drop first" $ do
+      result <- try @ConnectionError . bounded $ withAmp hangUpOnCommand (\conn -> sendAvrCommand conn GetPower)
+      result `shouldSatisfy` either lost (const False)
+
+    -- Events come whether anyone asked or not. With no command waiting
+    -- they go nowhere, and the next answer is still the next answer.
+    it "drops events that come between commands" $ do
+      let chatty seen sock = sendAll sock "MV45\rSITUNER\r" >> replying (poweredAmp Off) seen sock
+      (status, _) <- withAmp chatty $ \conn -> threadDelay 50000 >> sendAvrCommand conn GetPower
+      status `shouldBe` Off
+
+    -- A line with no end would grow the buffer for good.
+    it "gives up on a line that never ends" $ do
+      let endless _ sock = sendAll sock (BC.replicate 2000 'x') >> holding sock
+      result <- try @ConnectionError . bounded $ withAmp endless (const holdForever)
+      result `shouldSatisfy` either tooLong (const False)
 
   describe "runAvrLive" $ do
     it "runs getPower and setPower over the connection" $ do
@@ -272,6 +339,11 @@ spec = do
     "PW?" -> "MV45\rSITUNER\rPWON\r"
     _ -> ""
   hangUp _ _ = pure ()
+  -- Take the command, then hang up without an answer.
+  hangUpOnCommand _ sock = void (recv sock 1024)
   lost = \case
     ConnectionLost -> True
+    _ -> False
+  tooLong = \case
+    LineTooLong -> True
     _ -> False

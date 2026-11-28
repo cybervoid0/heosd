@@ -19,8 +19,8 @@ import Heos.Connection.Heos (findBox, readPid, runConnection, sendCommand, subsc
 import Heos.Connection.Types (ConnectionProps (..), ConnectionSockets (..), HeosConnection (..), HeosConnectionParams (..), Waiting (..))
 import Heos.Envelope.Heos (HeosEvent (..))
 import Heos.Error (CommandError (..), ConnectionError (..))
-import Heos.Logger (Severity (..), capturing)
 import Heos.FakeDevice (answering, answeringWith, commandPath, failReply, fixture, messageReply, scripted)
+import Heos.Logger (Severity (..), capturing)
 import Heos.Time (Seconds (..))
 import Heos.Types
 import Heos.Url (decodeQuery)
@@ -29,6 +29,9 @@ import Network.Socket.ByteString (recv, sendAll)
 import System.Timeout (timeout)
 import Test.Hspec
 import Test.QuickCheck (Gen, choose, elements, forAll, listOf, (===))
+
+lineEnd :: ByteString
+lineEnd = "\r\n"
 
 -- Bytes that make splitting interesting: plain letters plus both halves of
 -- the delimiter, so "\r\n", a lone "\r" and a lone "\n" all show up.
@@ -47,7 +50,7 @@ feed :: [ByteString] -> ([ByteString], ByteString)
 feed = fmap pendingBytes . foldl step ([], emptyPending)
  where
   step (done, tail') chunk =
-    let (complete, tail'') = feedChunk tail' chunk
+    let (complete, tail'') = feedChunk lineEnd tail' chunk
      in (done <> complete, tail'')
 
 pendingBytes :: Pending -> ByteString
@@ -813,42 +816,42 @@ spec = do
   describe "splitLines" $ do
     -- The three checks named in the roadmap.
     it "keeps a chunk without a delimiter as the remainder" $
-      splitLines "{\"heos\": {\"comm" `shouldBe` ([], "{\"heos\": {\"comm")
+      splitLines "{\"heos\": {\"comm" lineEnd `shouldBe` ([], "{\"heos\": {\"comm")
 
     it "returns both lines from a chunk with two complete lines" $
-      splitLines "one\r\ntwo\r\n" `shouldBe` (["one", "two"], "")
+      splitLines "one\r\ntwo\r\n" lineEnd `shouldBe` (["one", "two"], "")
 
     it "splits off the unfinished tail of a chunk that ends mid-line" $
-      splitLines "one\r\ntwo\r\nthr" `shouldBe` (["one", "two"], "thr")
+      splitLines "one\r\ntwo\r\nthr" lineEnd `shouldBe` (["one", "two"], "thr")
 
     it "returns nothing for an empty chunk" $
-      splitLines "" `shouldBe` ([], "")
+      splitLines "" lineEnd `shouldBe` ([], "")
 
     -- "\r" alone is half a delimiter: the "\n" may be in the next chunk.
     it "keeps a trailing \\r in the remainder" $
-      splitLines "one\r" `shouldBe` ([], "one\r")
+      splitLines "one\r" lineEnd `shouldBe` ([], "one\r")
 
     it "doesn't treat a bare \\n or \\r as a delimiter" $
-      splitLines "a\nb\rc\r\n" `shouldBe` (["a\nb\rc"], "")
+      splitLines "a\nb\rc\r\n" lineEnd `shouldBe` (["a\nb\rc"], "")
 
     -- An empty line is still a line. HEOS doesn't send them, but splitLines
     -- shouldn't silently drop data either; skipping empties is the caller's call.
     it "reports an empty line between two delimiters" $
-      splitLines "one\r\n\r\ntwo\r\n" `shouldBe` (["one", "", "two"], "")
+      splitLines "one\r\n\r\ntwo\r\n" lineEnd `shouldBe` (["one", "", "two"], "")
 
     it "splits a real get_players reply with the start of the next one glued on" $
-      splitLines (getPlayers <> "\r\n{\"heos\": {\"command\": \"event/")
+      splitLines (getPlayers <> "\r\n{\"heos\": {\"command\": \"event/") lineEnd
         `shouldBe` ([getPlayers], "{\"heos\": {\"command\": \"event/")
 
     describe "properties" $ do
       it "loses nothing: lines and remainder joined back give the input" $
         forAll genBytes $ \s ->
-          let (complete, rest) = splitLines s
+          let (complete, rest) = splitLines s lineEnd
            in BS.intercalate "\r\n" (complete <> [rest]) === s
 
       it "never leaves a delimiter inside a line or the remainder" $
         forAll genBytes $ \s ->
-          let (complete, rest) = splitLines s
+          let (complete, rest) = splitLines s lineEnd
            in not (any (BS.isInfixOf "\r\n") (rest : complete))
 
       -- The reason splitLines exists: however recv cuts the stream, carrying the
@@ -856,34 +859,39 @@ spec = do
       it "gives the same result however the input is cut into chunks" $
         forAll genBytes $ \s ->
           forAll (listOf (choose (0, 5))) $ \cuts ->
-            feed (chunksAt cuts s) === splitLines s
+            feed (chunksAt cuts s) === splitLines s lineEnd
 
   describe "feedChunk" $ do
     it "keeps a chunk without a line end pending, without copying it" $
-      feedChunk emptyPending "abc" `shouldBe` ([], Pending ["abc"] 3)
+      feedChunk lineEnd emptyPending "abc" `shouldBe` ([], Pending ["abc"] 3)
 
     it "ignores an empty chunk" $
-      feedChunk (Pending ["ab\r"] 3) "" `shouldBe` ([], Pending ["ab\r"] 3)
+      feedChunk lineEnd (Pending ["ab\r"] 3) "" `shouldBe` ([], Pending ["ab\r"] 3)
 
     it "adds a second chunk in front of the first" $
-      feedChunk (Pending ["abc"] 3) "de" `shouldBe` ([], Pending ["de", "abc"] 5)
+      feedChunk lineEnd (Pending ["abc"] 3) "de" `shouldBe` ([], Pending ["de", "abc"] 5)
 
     it "joins the pending chunks into the line they complete" $
-      feedChunk (Pending ["de", "abc"] 5) "f\r\n" `shouldBe` (["abcdef"], emptyPending)
+      feedChunk lineEnd (Pending ["de", "abc"] 5) "f\r\n" `shouldBe` (["abcdef"], emptyPending)
 
     it "keeps what follows the last line end as the new tail" $
-      feedChunk (Pending ["ab"] 2) "c\r\nd\r\nef" `shouldBe` (["abc", "d"], Pending ["ef"] 2)
+      feedChunk lineEnd (Pending ["ab"] 2) "c\r\nd\r\nef" `shouldBe` (["abc", "d"], Pending ["ef"] 2)
 
     -- "\r" at the end of the tail and "\n" at the start of the chunk is a
     -- line end too, though neither chunk contains it on its own.
     it "finds a line end split between the tail and the chunk" $
-      feedChunk (Pending ["ab\r"] 3) "\ncd" `shouldBe` (["ab"], Pending ["cd"] 2)
+      feedChunk lineEnd (Pending ["ab\r"] 3) "\ncd" `shouldBe` (["ab"], Pending ["cd"] 2)
+
+    -- The telnet side ends its lines with a lone "\r"; the same cutter
+    -- serves it when given that delimiter.
+    it "cuts telnet lines at a lone \\r" $
+      feedChunk "\r" (Pending ["PW"] 2) "ON\rMV45\rSI" `shouldBe` (["PWON", "MV45"], Pending ["SI"] 2)
 
     describe "properties" $ do
       it "counts the pending bytes correctly" $
         forAll genBytes $ \s ->
           forAll (listOf (choose (0, 5))) $ \cuts ->
-            let (_, tail') = foldl (\(_, p) c -> feedChunk p c) ([], emptyPending) (chunksAt cuts s)
+            let (_, tail') = foldl (\(_, p) c -> feedChunk lineEnd p c) ([], emptyPending) (chunksAt cuts s)
              in tail'.size === BS.length (pendingBytes tail')
 
       it "never leaves a line end in the pending tail" $

@@ -29,5 +29,7 @@ defaultParams =
           { port = 23
           , requestTimeout = Seconds 1
           , logger = mempty
+          , maxLineLength = 1024
+          , chunkLength = 256
           }
     }

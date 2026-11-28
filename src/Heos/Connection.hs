@@ -1,23 +1,9 @@
 module Heos.Connection (
-  HeosConnection (..),
-  HeosConnectionParams (..),
-  AvrConnectionParams (..),
-  subscribe,
-  sendCommand,
-  connectionParams,
-  getAddr,
-  withAvr,
+  module Heos.Connection.Avr,
+  module Heos.Connection.Heos,
+  module Heos.Connection.Types,
 ) where
 
 import Heos.Connection.Avr
-
-import Heos.Connection.Heos (
-  sendCommand,
-  subscribe,
- )
-import Heos.Connection.Types (
-  HeosConnection (..),
-  HeosConnectionParams (..),
-  connectionParams,
-  getAddr,
- )
+import Heos.Connection.Heos
+import Heos.Connection.Types

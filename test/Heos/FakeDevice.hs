@@ -26,6 +26,9 @@ import Network.Socket (Socket)
 import Network.Socket.ByteString (recv, sendAll)
 import System.FilePath ((</>))
 
+lineEnd :: ByteString
+lineEnd = "\r\n"
+
 -- | Read commands and answer each one with the echo reply until the other
 --   side hangs up. Every command line is handed to the callback first, so a
 --   test can log it.
@@ -40,7 +43,7 @@ answeringWith reply record sock = go emptyPending
   go pending = do
     chunk <- recv sock 4096
     unless (BS.null chunk) $ do
-      let (complete, pending') = feedChunk pending chunk
+      let (complete, pending') = feedChunk lineEnd pending chunk
       forM_ complete $ \line -> do
         record line
         sendAll sock (reply line)

@@ -1,4 +1,4 @@
-module Heos.Connection.Heos where
+module Heos.Connection.Heos (readPid, withConnection, sendCommand, subscribe, sendOn, runConnection, findBox) where
 
 import Control.Concurrent (newMVar, threadDelay, withMVar)
 import Control.Concurrent.Async (
@@ -46,7 +46,7 @@ import Heos.Command.Heos (Command (..), commandParts, decodeReply, renderCommand
 import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Connection.Types (
   ConnectionProps (..),
-  ConnectionSockets (ConnectionSockets, commands),
+  ConnectionSockets (..),
   EitherEnvelope,
   HeosConnection (..),
   HeosConnectionParams (..),
@@ -69,6 +69,9 @@ import Network.Socket (Family (..), HostAddress, SockAddr (..), Socket, SocketTy
 import Network.Socket.ByteString (recv, sendAll)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
+
+lineEnd :: BS.ByteString
+lineEnd = "\r\n"
 
 readPid :: Socket -> ConnectionProps -> IO PlayerId
 readPid connSock props = do
@@ -138,26 +141,26 @@ runConnection params (ConnectionSockets _ eSock cSock) act = do
 --   it too. A line longer than 'maxLineLength' is 'LineTooLong', so the
 --   buffer stays bounded.
 reader :: Socket -> ConnectionProps -> IO Void
-reader sock conn = go emptyPending `finally` failAll
+reader sock props = go emptyPending `finally` failAll
  where
   go pending = do
     chunk <- recv sock 4096
     -- пустой `recv` — это конец потока; бросить исключение, а не продолжать
     when (BS.null chunk) $ throwIO ConnectionLost
-    let (complete, pending') = feedChunk pending chunk
+    let (complete, pending') = feedChunk lineEnd pending chunk
     forM_ complete route
-    when (pending'.size > conn.params.maxLineLength) $ throwIO LineTooLong
+    when (pending'.size > props.params.maxLineLength) $ throwIO LineTooLong
     go pending'
-  logAt = conn.params.logger.logAt
+  logAt = props.params.logger.logAt
   -- одна полная строка: разобрать и доставить по назначению
   route bs = do
     let eitherIncEnv = classifyEnvelope <$> eitherDecodeStrict bs
     case eitherIncEnv of
-      Right (IncomingEvent event _) -> atomically . writeTChan conn.events $ event
+      Right (IncomingEvent event _) -> atomically . writeTChan props.events $ event
       Right (IncomingPending _) -> pure ()
       Right (IncomingResponse _ env) -> do
         delivered <- atomically $ do
-          waiting <- readTVar conn.waiting
+          waiting <- readTVar props.waiting
           let HeosHeader{command, message} = env.heos
               mbBox = findBox command message waiting
           maybe (pure False) (\box -> tryPutTMVar box (Right env)) mbBox
@@ -165,9 +168,9 @@ reader sock conn = go emptyPending `finally` failAll
       Left err -> logAt Warn $ "Unreadable line: " <> show bs <> ": " <> err
   -- при любом завершении (`finally`): пройти по всей карте, положить в каждую коробочку `Left ConnectionLost`, карту очистить.
   failAll = atomically $ do
-    mapping <- readTVar conn.waiting
+    mapping <- readTVar props.waiting
     forM_ mapping $ \waiting -> tryPutTMVar waiting.box (Left ConnectionLost)
-    writeTVar conn.waiting Map.empty
+    writeTVar props.waiting Map.empty
 
 -- | Which waiting box a reply belongs to. SEQUENCE is echoed only when
 --   the command had arguments; without it, the single box in flight is

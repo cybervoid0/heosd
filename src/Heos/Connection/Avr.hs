@@ -1,73 +1,112 @@
-module Heos.Connection.Avr where
+module Heos.Connection.Avr (sendAvrCommand, withAvr, AvrConnection (..), AvrConnectionParams (..), answerOf) where
 
 import Control.Concurrent (MVar, newMVar, withMVar)
-import Control.Exception (Exception (displayException), IOException, handle, throwIO, try)
-import Control.Monad ((>=>))
-import Control.Monad.Catch (bracket, bracketOnError)
-import Data.ByteString.Char8 qualified as B
+import Control.Concurrent.Async (race)
+import Control.Concurrent.STM (TChan, TVar, atomically, check, dupTChan, newBroadcastTChanIO, newTVarIO, orElse, readTChan, readTVar, writeTChan, writeTVar)
+import Control.Exception (Exception (displayException), IOException, bracket, finally, handle, throwIO, try)
+import Control.Monad (forM_, when)
+import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
+import Data.Void (Void, absurd)
 import Heos.Command.Avr (AvrCommand (..), renderAvrCommand)
+import Heos.Connection.Framing (Pending (..), emptyPending, feedChunk)
 import Heos.Envelope.Avr (AvrResponse (..), decodeAvrLine)
-import Heos.Error (AvrError (..), ConnectionError (ConnectionLost))
-import Heos.Logger (Logger (..), Severity (Warn), logged)
+import Heos.Error (AvrError (..), ConnectionError (ConnectionLost, LineTooLong))
+import Heos.Logger (Logger (..), Severity (..), logged)
 import Heos.Time (Seconds, toMicros)
-import Network.Socket (Family (AF_INET), HostAddress, PortNumber, SockAddr (..), SocketType (Stream), socketToHandle)
+import Network.Socket (Family (AF_INET), HostAddress, PortNumber, SockAddr (SockAddrInet), Socket, SocketType (Stream))
 import Network.Socket qualified as S
-import System.IO (Handle, IOMode (ReadWriteMode), hClose, hFlush, hGetChar, hSetBinaryMode)
+import Network.Socket.ByteString (recv, sendAll)
 import System.Timeout (timeout)
+
+-- | What ends a line on the telnet wire.
+lineEnd :: ByteString
+lineEnd = "\r"
 
 -- | What the telnet connection is opened with.
 data AvrConnectionParams = AvrConnectionParams
   { port :: PortNumber
   , requestTimeout :: Seconds
+  , maxLineLength :: Int
+  , chunkLength :: Int
   , logger :: Logger
   }
 
+-- | An open telnet line: the socket, the lines the reader hands out,
+--   whether the reader is still running, and a lock so that only one
+--   command is in flight at a time.
 data AvrConnection = AvrConnection
-  { lock :: MVar Handle
+  { socket :: Socket
+  , linesChannel :: TChan AvrResponse
+  , alive :: TVar Bool
+  , lock :: MVar ()
   , params :: AvrConnectionParams
   }
 
-withAvr :: AvrConnectionParams -> HostAddress -> (Maybe AvrConnection -> IO a) -> IO a
-withAvr params addr act = bracket open (mapM_ hClose) (traverse toConnection >=> act)
+-- | Connect a socket to the amplifier's telnet port and close it when
+--   the action ends. A refused connect is logged and gives 'Nothing'.
+withAvrSocket :: AvrConnectionParams -> HostAddress -> (Maybe Socket -> IO a) -> IO a
+withAvrSocket params hostAddr act = bracket (S.socket AF_INET Stream S.defaultProtocol) S.close $ \sock ->
+  try @IOException (S.connect sock sockAddr) >>= \case
+    Left e -> logAvrError e >> act Nothing
+    Right () -> act (Just sock)
  where
-  toConnection h = do
-    lock <- newMVar h
-    pure $ AvrConnection{lock, params}
-
-  open = bracketOnError (S.socket AF_INET Stream S.defaultProtocol) S.close $ \s ->
-    (try @IOException $ S.connect s sockAddr) >>= \case
-      Left e -> do
-        logAvrError e
-        S.close s
-        pure Nothing
-      Right () -> do
-        h <- socketToHandle s ReadWriteMode
-        hSetBinaryMode h True
-        pure $ Just h
-
-  sockAddr = SockAddrInet params.port addr
+  sockAddr = SockAddrInet params.port hostAddr
   logAvrError e = params.logger.logAt Warn $ "AVR: cannot connect to " <> show sockAddr <> ": " <> displayException e
 
-sendAvrCommand :: AvrConnection -> AvrCommand a -> IO a
-sendAvrCommand conn cmd = handle (\(_ :: IOException) -> throwIO ConnectionLost) $ withMVar conn.lock $ \h ->
-  logged conn.params.logger ("AVR " <> show cmd) $ do
-    B.hPut h (renderAvrCommand cmd)
-    hFlush h
-    timeout (toMicros conn.params.requestTimeout) (awaitAnswer h) >>= maybe (throwIO AvrNoReply) pure
- where
-  -- события вроде MV45 пропускаем, ждём строку, которая отвечает на нашу команду
-  awaitAnswer h = do
-    res <- decodeAvrLine <$> readCR h
-    maybe (awaitAnswer h) pure (answerOf cmd res)
+-- | Open the telnet line and run the action over it, with the reader
+--   beside it. 'Nothing' when the port refuses. If the reader dies, the
+--   action is cancelled and its error comes out of here.
+withAvr :: AvrConnectionParams -> HostAddress -> (Maybe AvrConnection -> IO a) -> IO a
+withAvr params hostAddr act = withAvrSocket params hostAddr $ \case
+  Nothing -> act Nothing
+  Just socket -> do
+    linesChannel <- newBroadcastTChanIO
+    alive <- newTVarIO True
+    lock <- newMVar ()
+    let avrConn = AvrConnection{socket, linesChannel, alive, lock, params}
+    res <- race (avrReader avrConn) (act $ Just avrConn)
+    either absurd pure res
 
+-- | The only thread that reads the socket. Cuts the stream into lines
+--   and broadcasts each one. On hang-up it marks the line dead and
+--   throws 'ConnectionLost'.
+avrReader :: AvrConnection -> IO Void
+avrReader conn = withErrHandle `finally` failAll
+ where
+  withErrHandle = handle @IOException (const $ throwIO ConnectionLost) $ go emptyPending
+  go pending = do
+    chunk <- recv conn.socket conn.params.chunkLength
+    when (BS.null chunk) $ throwIO ConnectionLost
+    let (complete, pending') = feedChunk lineEnd pending chunk
+    when (pending'.size > conn.params.maxLineLength) $ throwIO LineTooLong
+    forM_ complete route
+    go pending'
+  route bs = do
+    let avrResp = decodeAvrLine bs
+    atomically $ writeTChan conn.linesChannel avrResp
+  failAll = atomically $ writeTVar conn.alive False
+
+-- | Send a command and wait for its answer, skipping events. Throws
+--   'AvrNoReply' on timeout and 'ConnectionLost' if the line drops.
+sendAvrCommand :: AvrConnection -> AvrCommand a -> IO a
+sendAvrCommand conn cmd =
+  handle @IOException (const $ throwIO ConnectionLost) $ withMVar conn.lock $ \_ ->
+    logged conn.params.logger ("AVR " <> show cmd) $ do
+      linesChan <- atomically $ dupTChan conn.linesChannel
+      sendAll conn.socket (renderAvrCommand cmd)
+      timeout (toMicros conn.params.requestTimeout) (awaitAnswer linesChan) >>= maybe (throwIO AvrNoReply) pure
+ where
+  awaitAnswer linesChan = do
+    next <-
+      atomically $
+        (Just <$> readTChan linesChan) `orElse` (readTVar conn.alive >>= check . not >> pure Nothing)
+    case next of
+      Nothing -> throwIO ConnectionLost
+      Just res -> maybe (awaitAnswer linesChan) pure (answerOf cmd res)
+
+-- | Whether this line answers this command, and with what.
 answerOf :: AvrCommand a -> AvrResponse -> Maybe a
 answerOf GetPower (PowerStatus pw) = Just pw
 answerOf (SetPower _) (PowerStatus _) = Just () -- устройство эхом шлёт PWON / PWSTANDBY
 answerOf _ _ = Nothing
-
-readCR :: Handle -> IO B.ByteString
-readCR h = go []
- where
-  go acc = do
-    c <- hGetChar h
-    if c == '\r' then pure (B.pack (reverse acc)) else go (c : acc)

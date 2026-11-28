@@ -11,8 +11,7 @@ import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (isJust)
 import GHC.Clock (getMonotonicTime)
 import Heos.Command.Heos (Command (..))
-import Heos.Command.Avr (AvrCommand (..))
-import Heos.Connection.Avr (AvrConnectionParams (..), sendAvrCommand)
+import Heos.Connection.Avr (AvrConnectionParams (..))
 import Heos.Connection.Heos (sendCommand)
 import Heos.Connection.Types (HeosConnectionParams (..))
 import Heos.Connection.Types qualified as HeosParams
@@ -110,7 +109,7 @@ freePort = withDeviceOn defaultPort (\port _ -> pure port)
 -- Parameters for a device on these ports. The tests check that the next
 -- attempt happens, not how long it waits, hence the 10 ms policy.
 paramsFor :: PortNumber -> PortNumber -> DeviceParams
-paramsFor port amp = DeviceParams{heos = heosParamsFor port, avr = AvrConnectionParams{port = amp, requestTimeout = Seconds 0.2, logger = mempty}}
+paramsFor port amp = DeviceParams{heos = heosParamsFor port, avr = AvrConnectionParams{port = amp, requestTimeout = Seconds 0.2, maxLineLength = 1024, chunkLength = 256, logger = mempty}}
 
 -- Change the HEOS side of the parameters. (A record update on `heos` is
 -- ambiguous: Device has a field of that name too.)
@@ -283,17 +282,19 @@ reconnectingSpec = describe "reconnecting" $ do
       wait device
 
   -- The telnet session lives and dies with the link: a telnet socket the
-  -- amplifier closes under a command is a dropped link, both connections
-  -- are set up again and the action is restarted. The amplifier takes the
-  -- first command and hangs up; every later session it holds.
-  it "reconnects when the amplifier closes the telnet socket" $
-    withAmpThat (\n sock -> if n == 1 then void (recv sock 1024) else holding sock) $ \amp ->
+  -- amplifier closes is a dropped link, both connections are set up again
+  -- and the action is restarted. No command is sent: the telnet reader
+  -- notices the hang-up by itself. The amplifier closes the first session
+  -- once the action is running; every later session it holds.
+  it "reconnects when the amplifier closes the telnet socket, with no command sent" $ do
+    running <- newEmptyMVar
+    withAmpThat (\n sock -> if n == 1 then readMVar running else holding sock) $ \amp ->
       withDeviceOn defaultPort $ \port srv -> do
         (start, _) <- counting
         device <- async (serve srv >> serve srv)
-        result <- bounded $ reconnecting (paramsFor port amp) (pure loopback) $ \dev -> do
+        result <- bounded $ reconnecting (paramsFor port amp) (pure loopback) $ \_ -> do
           n <- start
-          when (n == 1) (maybe (fail "no telnet line") (\avr -> void (sendAvrCommand avr GetPower)) dev.avr)
+          when (n == 1) (putMVar running () >> forever (threadDelay maxBound))
           pure n
         result `shouldBe` 2
         wait device
